@@ -11,8 +11,8 @@ let stats = JSON.parse(localStorage.getItem('gomoku-stats')) || { won: 0, lost: 
 let profile = JSON.parse(localStorage.getItem('gomoku-player-profile')) || { quadrant_bias: '중앙', attack: 50, defense: 50, center: 50, edge: 50, speed: 50 };
 let lossHistory = JSON.parse(localStorage.getItem('gomoku-loss-history')) || [];
 let winProbHistory = JSON.parse(localStorage.getItem('gomoku-winprob-history')) || [];
-let heatmapEnabled = false, isThinking = false, model = null;
-let missedOpportunityCell = -1; 
+let heatmapEnabled = false, isThinking = false, model = null, modelReady = false;
+let missedOpportunityCell = -1, hoverPos = null; 
 
 const canvas = document.getElementById('board-canvas'), ctx = canvas.getContext('2d');
 canvas.width = canvas.height = CANVAS_SIZE;
@@ -34,6 +34,7 @@ async function initModel() {
         ]});
         model.compile({ optimizer: tf.train.adam(stats.total < 5 ? 0.005 : 0.001), loss: 'meanSquaredError' });
     }
+    modelReady = true;
     updateUI();
 }
 
@@ -151,7 +152,7 @@ async function getAdaptiveModifiersForCandidates(b, candidateIndices) {
 // 인터랙션
 // ==========================================
 canvas.addEventListener('click', e => {
-    if(isThinking) return;
+    if(isThinking || !modelReady) return;
     const rect = canvas.getBoundingClientRect();
     
     // 반응형 스케일 대응! canvas 내부 해상도 대비 현재 DOM 렌더 사이즈 비율
@@ -164,7 +165,35 @@ canvas.addEventListener('click', e => {
     if(x >= 0 && x < SIZE && y >= 0 && y < SIZE && board[y*SIZE + x] === 0) userMove(x, y);
 });
 
+canvas.addEventListener('mousemove', e => {
+    if(isThinking || !modelReady) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    const x = Math.round(((e.clientX - rect.left) * scaleX - PAD - CELL/2) / CELL);
+    const y = Math.round(((e.clientY - rect.top) * scaleY - PAD - CELL/2) / CELL);
+    
+    if(x >= 0 && x < SIZE && y >= 0 && y < SIZE && board[y*SIZE + x] === 0) {
+        if(!hoverPos || hoverPos.x !== x || hoverPos.y !== y) {
+            hoverPos = {x, y};
+            renderBoard();
+        }
+    } else if(hoverPos !== null) {
+        hoverPos = null;
+        renderBoard();
+    }
+});
+
+canvas.addEventListener('mouseout', () => {
+    if(hoverPos !== null) {
+        hoverPos = null;
+        renderBoard();
+    }
+});
+
 async function userMove(x, y) {
+    hoverPos = null;
     flashQualityBadge(x, y); 
     makeMove(x, y, 1);
     if(checkWin(x, y, 1)) return endGame('won'); 
@@ -399,6 +428,12 @@ function renderBoard() {
         } 
     });
 
+    if(hoverPos && !isThinking) {
+        let hx = PAD+hoverPos.x*CELL+CELL/2, hy = PAD+hoverPos.y*CELL+CELL/2; 
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath(); ctx.arc(hx,hy,15,0,7); ctx.fill();
+    }
+
     if(missedOpportunityCell !== -1) {
         let mx = PAD + (missedOpportunityCell % SIZE) * CELL;
         let my = PAD + Math.floor(missedOpportunityCell / SIZE) * CELL;
@@ -571,6 +606,7 @@ document.querySelectorAll('.section-title').forEach(title => {
 
 // 스타트업 모달 이벤트
 document.getElementById('btn-start-new').addEventListener('click', () => {
+    if(!modelReady) { alert('AI 모델을 불러오는 중입니다. 잠시만 기다려주세요!'); return; }
     document.getElementById('startup-overlay').style.display = 'none';
     isThinking = false; 
 });
