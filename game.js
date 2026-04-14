@@ -86,6 +86,32 @@ function evaluateBoard(b, targetPlayer) {
     return s;
 }
 
+// UI 승률, 히트맵 예측 전용 (오목봇 자신은 사용하지 못하는 '수읽기' 절대 규범)
+function godModeEvaluate(b, depth, alpha, beta, maximizingPlayer) {
+    let s = evaluateBoard(b, 2);
+    if(depth === 0 || Math.abs(s) > PATTERNS.WIN*0.5) return s;
+    let candidates = getCandidates(b);
+    if(candidates.length === 0) return 0;
+
+    if(maximizingPlayer) { 
+        let maxV = -Infinity;
+        for(let idx of candidates) {
+            b[idx] = 2; let v = godModeEvaluate(b, depth - 1, alpha, beta, false); b[idx] = 0;
+            maxV = Math.max(maxV, v); alpha = Math.max(alpha, v);
+            if(beta <= alpha) break; 
+        }
+        return maxV;
+    } else { 
+        let minV = Infinity;
+        for(let idx of candidates) {
+            b[idx] = 1; let v = godModeEvaluate(b, depth - 1, alpha, beta, true); b[idx] = 0;
+            minV = Math.min(minV, v); beta = Math.min(beta, v);
+            if(beta <= alpha) break; 
+        }
+        return minV;
+    }
+}
+
 function getCandidates(b) {
     let res = new Set();
     for(let i=0; i<SIZE*SIZE; i++) {
@@ -243,6 +269,7 @@ async function botMove() {
 function makeMove(x, y, p) {
     board[y*SIZE+x] = p;
     gameHistory.push({idx: y*SIZE+x, x, y, player: p, time: Date.now(), boardState: [...board]});
+    recalculateHeatmap();
     renderBoard();
 }
 
@@ -256,7 +283,8 @@ function checkWin(x, y, p) {
 }
 
 function updateProb() {
-    const s = evaluateBoard(board, 2);
+    // UI 로직: 깊은 수읽기를 사용하여 현재 보드의 '진짜' 승률 계산
+    const s = godModeEvaluate(board, 1, -Infinity, Infinity, true); 
     const p = 1 / (1 + Math.exp(-s / 100000)); 
     winProbTrace.push(p);
 }
@@ -376,20 +404,33 @@ function renderBoard() {
     if(heatmapEnabled) renderHeatmap();
 }
 
-function renderHeatmap() {
-    let ss = Array(SIZE*SIZE).fill(0), topCells = [];
+let currentHeatmapData = null;
+
+function recalculateHeatmap() {
+    if(!heatmapEnabled) return;
+    let topCells = [];
     for(let i=0; i<SIZE*SIZE; i++) {
         if(board[i]===0) {
-            board[i]=2; ss[i]=evaluateBoard(board, 2); board[i]=0; 
-            topCells.push({idx: i, score: ss[i]});
+            board[i]=1; 
+            // 유저의 수(1)를 두고 봇이 반격(true)했을 때의 봇 관점 점수
+            let s = godModeEvaluate(board, 1, -Infinity, Infinity, true); 
+            board[i]=0; 
+            // 유저 입장에서 얼마나 유리한가? = 봇의 입장에서 얼마나 불리한가(-s)
+            topCells.push({idx: i, score: -s});
         }
     }
     topCells.sort((a,b) => b.score - a.score);
-    if(topCells.length === 0 || topCells[0].score <= 0) return; 
+    currentHeatmapData = topCells.length > 0 && topCells[0].score > 0 ? topCells : null;
+}
+
+function renderHeatmap() {
+    if(!currentHeatmapData) return;
+    let topCells = currentHeatmapData;
     let max = topCells[0].score;
     let top3Sum = topCells.slice(0,3).reduce((acc, c) => acc + c.score, 0) || 1;
 
-    ss.forEach((s,i)=>{
+    topCells.forEach((c)=>{
+        let {idx: i, score: s} = c;
         if(s < max*0.2) return; 
         const x = PAD + (i%SIZE)*CELL, y = PAD + Math.floor(i/SIZE)*CELL;
         ctx.fillStyle = `rgba(255,0,0,${(s/max)*0.6})`; 
@@ -521,8 +562,8 @@ function importMemory(event) {
 // ==========================================
 // 버튼 및 UI 이벤트 등록
 // ==========================================
-document.getElementById('btn-play-again').onclick = () => { board.fill(0); gameHistory = []; winProbTrace = [0.5]; document.getElementById('modal-overlay').style.display = 'none'; isThinking = false; renderBoard(); updateUI(); };
-document.getElementById('btn-toggle-heatmap').onclick = () => { heatmapEnabled = !heatmapEnabled; document.getElementById('btn-toggle-heatmap').innerText = `예측 맵: ${heatmapEnabled ? '켜짐' : '끄기'}`; renderBoard(); };
+document.getElementById('btn-play-again').onclick = () => { board.fill(0); gameHistory = []; winProbTrace = [0.5]; document.getElementById('modal-overlay').style.display = 'none'; isThinking = false; recalculateHeatmap(); renderBoard(); updateUI(); };
+document.getElementById('btn-toggle-heatmap').onclick = () => { heatmapEnabled = !heatmapEnabled; document.getElementById('btn-toggle-heatmap').innerText = `예측 맵: ${heatmapEnabled ? '켜짐' : '끄기'}`; recalculateHeatmap(); renderBoard(); };
 document.getElementById('btn-reset').onclick = () => { if(confirm("모든 기억과 승률 데이터를 지우시겠습니까?")) { localStorage.clear(); location.reload(); } };
 document.getElementById('btn-export').onclick = () => { exportMemory(); };
 document.getElementById('import-file').addEventListener('change', importMemory);
@@ -548,8 +589,7 @@ document.getElementById('btn-start-load').addEventListener('click', () => {
 
 // 최초 실행 및 초기 상태
 isThinking = true; // 모달을 닫기 전까지는 착수 제한
-updateProfile(); initModel(); renderBoard();
+updateProfile(); initModel(); recalculateHeatmap(); renderBoard();
 window.addEventListener('resize', () => {
     renderBoard();
-    // 화면 크기 복원 시 아코디언 클래스는 CSS 디스플레이 속성으로 덮어씌워지므로 무시됨
 });
