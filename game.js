@@ -27,7 +27,7 @@ function pushLog(msg, type='bot-sys') {
 const canvas = document.getElementById('board-canvas'), ctx = canvas.getContext('2d');
 canvas.width = canvas.height = CANVAS_SIZE;
 
-const PATTERNS = { WIN: 1000000, OPEN_4: 100000, BLOCKED_4: 10000, OPEN_3: 5000, BLOCKED_3: 500, OPEN_2: 200 };
+const PATTERNS = { WIN: 10000000, OPEN_4: 1000000, BLOCKED_4: 100000, OPEN_3: 10000, BLOCKED_3: 5000, OPEN_2: 100 };
 
 // ==========================================
 // 모델 초기화
@@ -35,11 +35,16 @@ const PATTERNS = { WIN: 1000000, OPEN_4: 100000, BLOCKED_4: 10000, OPEN_3: 5000,
 async function initModel() {
     try {
         model = await tf.loadLayersModel('localstorage://gomoku-adaptive-weights');
+        // 신규 CNN 구조 여부를 확인하여, 예전 모델이면 에러를 던져 초기화 유도
+        if (model.inputs[0].shape[1] !== 225) throw new Error("Old model architecture");
     } catch (e) {
         model = tf.sequential({ layers: [
-            tf.layers.dense({ units: 128, activation: 'relu', inputShape: [229] }), 
-            tf.layers.dropout({ rate: 0.1 }),
+            tf.layers.reshape({ targetShape: [15, 15, 1], inputShape: [225] }),
+            tf.layers.conv2d({ filters: 32, kernelSize: 5, padding: 'same', activation: 'relu' }),
+            tf.layers.conv2d({ filters: 64, kernelSize: 3, padding: 'same', activation: 'relu' }),
+            tf.layers.flatten(),
             tf.layers.dense({ units: 64, activation: 'relu' }),
+            tf.layers.dropout({ rate: 0.2 }),
             tf.layers.dense({ units: 1, activation: 'tanh' })
         ]});
         model.compile({ optimizer: tf.train.adam(stats.total < 5 ? 0.005 : 0.001), loss: 'meanSquaredError' });
@@ -73,30 +78,85 @@ function countContinuousLength(b, x, y, dx, dy, p) {
     return { count: count + 1, open, blocked: (blocked1 && blocked2) };
 }
 
-function getBaseScore(b, x, y, p) {
+// getBaseScore is replaced by localized sliding windows in evaluateBoard
+function evaluateBoard(b, targetPlayer) {
+    const enemy = targetPlayer === 1 ? 2 : 1;
     let score = 0;
-    const directions = [[1,0], [0,1], [1,1], [1,-1]];
-    score += Math.max(0, 80 - Math.sqrt((x-7)**2 + (y-7)**2) * 10);
-    for(let [dx, dy] of directions) {
-        const { count, open, blocked } = countContinuousLength(b, x, y, dx, dy, p);
-        if(count >= 5) score += PATTERNS.WIN;
-        else if(count === 4) score += open === 2 ? PATTERNS.OPEN_4 : (!blocked ? PATTERNS.BLOCKED_4 : 0);
-        else if(count === 3) score += open === 2 ? PATTERNS.OPEN_3 : (!blocked ? PATTERNS.BLOCKED_3 : 0);
-        else if(count === 2) score += open === 2 ? PATTERNS.OPEN_2 : 0;
+
+    const evaluateWindow = (pCount, eCount) => {
+        if(eCount > 0) return 0;
+        if(pCount === 5) return 10000000;
+        if(pCount === 4) return 1000000;
+        if(pCount === 3) return 10000;
+        if(pCount === 2) return 100;
+        if(pCount === 1) return 2;
+        return 0;
+    };
+
+    // 중앙 선호도 부여
+    for(let i=0; i<SIZE*SIZE; i++) {
+        if(b[i] !== 0) {
+            let x = i % SIZE, y = Math.floor(i / SIZE);
+            let bias = Math.max(0, 80 - Math.sqrt((x-7)**2 + (y-7)**2) * 10);
+            if(b[i] === targetPlayer) score += bias;
+            else score -= bias * 2.5; 
+        }
     }
+
+    // 4방향 윈도우 스캔 (크기 5) - 끊어진 패턴(함정)까지 모두 탐지
+    for(let y=0; y<SIZE; y++) {
+        for(let x=0; x<SIZE; x++) {
+            // 가로
+            if(x <= SIZE-5) {
+                let p1=0, e1=0, p2=0, e2=0;
+                for(let k=0; k<5; k++) {
+                    let v = b[y*SIZE + x + k];
+                    if(v === targetPlayer) { p1++; e2++; }
+                    else if(v === enemy) { e1++; p2++; }
+                }
+                score += evaluateWindow(p1, e1);
+                score -= evaluateWindow(p2, e2) * 2.5;
+            }
+            // 세로
+            if(y <= SIZE-5) {
+                let p1=0, e1=0, p2=0, e2=0;
+                for(let k=0; k<5; k++) {
+                    let v = b[(y+k)*SIZE + x];
+                    if(v === targetPlayer) { p1++; e2++; }
+                    else if(v === enemy) { e1++; p2++; }
+                }
+                score += evaluateWindow(p1, e1);
+                score -= evaluateWindow(p2, e2) * 2.5;
+            }
+            // 대각선 \
+            if(x <= SIZE-5 && y <= SIZE-5) {
+                let p1=0, e1=0, p2=0, e2=0;
+                for(let k=0; k<5; k++) {
+                    let v = b[(y+k)*SIZE + (x+k)];
+                    if(v === targetPlayer) { p1++; e2++; }
+                    else if(v === enemy) { e1++; p2++; }
+                }
+                score += evaluateWindow(p1, e1);
+                score -= evaluateWindow(p2, e2) * 2.5;
+            }
+            // 대각선 /
+            if(x >= 4 && y <= SIZE-5) {
+                let p1=0, e1=0, p2=0, e2=0;
+                for(let k=0; k<5; k++) {
+                    let v = b[(y+k)*SIZE + (x-k)];
+                    if(v === targetPlayer) { p1++; e2++; }
+                    else if(v === enemy) { e1++; p2++; }
+                }
+                score += evaluateWindow(p1, e1);
+                score -= evaluateWindow(p2, e2) * 2.5;
+            }
+        }
+    }
+    
     return score;
 }
 
-function evaluateBoard(b, targetPlayer) {
-    let s = 0;
-    for(let i=0; i<SIZE*SIZE; i++) {
-        if(b[i] === targetPlayer) s += getBaseScore(b, i % SIZE, Math.floor(i / SIZE), targetPlayer);
-        else if(b[i] !== 0) s -= getBaseScore(b, i % SIZE, Math.floor(i / SIZE), b[i]) * 1.2; 
-    }
-    return s;
-}
-
-// UI 승률, 히트맵 예측 전용 (오목봇 자신은 사용하지 못하는 '수읽기' 절대 규범)
+// 기존 UI 전용이었으나, 이제 봇의 핵심 엔진으로 승격된 깊은 수읽기 (Minimax) 절대 규범
 function godModeEvaluate(b, depth, alpha, beta, maximizingPlayer) {
     let s = evaluateBoard(b, 2);
     if(depth === 0 || Math.abs(s) > PATTERNS.WIN*0.5) return s;
@@ -142,13 +202,12 @@ function getCandidates(b) {
 }
 
 async function getAdaptiveModifiersForCandidates(b, candidateIndices) {
-    const meta = [gameHistory.length/225, stats.won/(stats.total||1), stats.total/50, 0.5];
     let batchFeatures = [];
     
     for(let idx of candidateIndices) {
         b[idx] = 2; // 현재 후보에 돌을 놓아본 가상 보드
         const feat = Array.from(b).map(v => v === 1 ? 1 : (v === 2 ? -1 : 0));
-        batchFeatures.push(feat.concat(meta));
+        batchFeatures.push(feat); // 보드의 순수 공간 구조만 입력으로 전송
         b[idx] = 0; // 원복
     }
 
@@ -213,12 +272,17 @@ async function userMove(x, y) {
 }
 
 async function botMove() {
-    pushLog(`음... 어디에 두면 좋을지 생각 중이에요! 🤔`, 'bot-sys');
+    const thinkingMsgs = [
+        `어디가 좋을지 잠시 수읽기 중입니다... 🤔`,
+        `음, 신중하게 포석을 구상하고 있어요. 🧐`,
+        `당신의 다음 수를 예측해 보는 중이에요. 💭`
+    ];
+    pushLog(thinkingMsgs[Math.floor(Math.random()*thinkingMsgs.length)], 'bot-sys');
     await sleep(800);
 
     let cans = getCandidates(board);
     let scoredCans = [];
-    // 1단계: 순수 상태 평가로 모든 후보 평가 (딥 서치 제거 - 트랩에 취약해짐)
+    // 1단계: 끊어진 윈도우까지 탐지하는 향상된 상태 평가
     for(let idx of cans) {
         board[idx] = 2; 
         let rawScore = evaluateBoard(board, 2); 
@@ -230,14 +294,29 @@ async function botMove() {
     scoredCans.sort((a,b) => b.rawScore - a.rawScore);
     let topCans = scoredCans.slice(0, 15);
     
-    if (stats.total > 0) {
-        pushLog(`잠깐만요, 예전에 당신한테 당했던 함정이 있는지 제 기억(신경망)을 떠올려볼게요... 🧠`, 'bot-think');
-    } else {
-        pushLog(`아직 배운 건 없지만, 제 동물적인 직감(초기 신경망)에 의존해 볼게요... 🧠`, 'bot-think');
-    }
-    await sleep(1200);
+    // -- 사용자가 아쉬워했던 '수읽기 절대 규범' 해금! --
+    pushLog(`봉인해둔 '수읽기 절대 규범(Minimax)'을 해제합니다. 상대의 다음 수를 예측해볼게요... 👁️`, 'bot-think');
+    await sleep(800);
 
-    // 2단계: 상위 후보들에 대해 신경망(Layer 2) 일괄 예측
+    // 2단계: 함정 조기 간파를 막기 위해 수읽기를 1-ply로 얕게 제한 (상대의 즉각 패배/승리만 걸러냄)
+    for(let i=0; i<topCans.length; i++) {
+        board[topCans[i].idx] = 2; 
+        // 봇이 직전 수(1-ply)를 둔 상태에서 극단적인 대응만 고려하는 얕은 탐색
+        topCans[i].rawScore = godModeEvaluate(board, 1, -Infinity, Infinity, false); 
+        board[topCans[i].idx] = 0;
+    }
+    
+    // 수읽기 결과로 다시 정렬 (수읽기로 발견한 치명적 함정 픽은 점수가 나락으로 감)
+    topCans.sort((a,b) => b.rawScore - a.rawScore);
+
+    if (stats.total > 0) {
+        pushLog(`수읽기 완료! 이제 오답 노트를 꺼내 미세한 패턴 보정(신경망)을 거칩니다. 🧠`, 'bot-think');
+    } else {
+        pushLog(`수읽기 완료! 아직 학습 데이터는 없지만 제 얕은 직감을 보태볼게요. 🧠`, 'bot-think');
+    }
+    await sleep(800);
+
+    // 3단계: 상위 후보들에 대해 신경망(Layer 2) 일괄 예측
     let topIndices = topCans.map(c => c.idx);
     let mods = await getAdaptiveModifiersForCandidates(board, topIndices);
     
@@ -249,8 +328,8 @@ async function botMove() {
         let rawScore = topCans[i].rawScore;
         let mod = mods[i]; 
         
-        // 신경망 개입: 휴리스틱 점수에 유의미한 보정치 합산
-        let blendedScore = rawScore + (mod * 8000); 
+        // 신경망 개입: 휴리스틱 점수에 유의미한 보정치 합산 (스케일 상향 반영)
+        let blendedScore = rawScore + (mod * 20000); 
         
         // 확정적인 승/패 방어는 건드리지 않음
         if (Math.abs(rawScore) > PATTERNS.WIN * 0.5) blendedScore = rawScore;
@@ -264,14 +343,14 @@ async function botMove() {
     
     if (best !== originalBest) {
         if (stats.total > 0) {
-            pushLog(`앗! 방금 그곳은 예전에 당했던 함정 패턴과 비슷해요! 😱 본능을 거스르고 피해야겠어요.`, 'bot-nn');
+            pushLog(`잠깐! 방금 수읽기로 정한 자리가 제 신경망 오답 노트의 함정 확률과 유사하네요. 😱 수정합니다.`, 'bot-nn');
         } else {
-            pushLog(`왠지 모르게 직감적으로 위험해 보이네요! 🧐 본능을 거스르고 다른 곳을 찾아볼게요.`, 'bot-nn');
+            pushLog(`본능적으로 그 자리는 조금 불길해 보이네요. 전략을 수정합니다. 🧐`, 'bot-nn');
         }
         await sleep(800);
-        pushLog(`대신 상대적으로 안전해 보이는 (${best%SIZE}, ${Math.floor(best/SIZE)})에 둘게요! ✨`, 'bot-act');
+        pushLog(`수읽기 대신 직감을 믿고 (${best%SIZE}, ${Math.floor(best/SIZE)}) 위치에 착수합니다. ✨`, 'bot-act');
     } else {
-        pushLog(`별다른 위험은 보이지 않네요. 예정대로 (${best%SIZE}, ${Math.floor(best/SIZE)})에 착수! 😊`, 'bot-act');
+        pushLog(`논리적 수읽기 엔진과 신경망 직감이 일치합니다! (${best%SIZE}, ${Math.floor(best/SIZE)})에 착수! 😊`, 'bot-act');
     }
 
     await sleep(600);
@@ -308,14 +387,10 @@ function checkWin(x, y, p) {
 }
 
 function updateProb() {
-    let botScore = 0, userScore = 0;
-    for(let i=0; i<SIZE*SIZE; i++) {
-        if(board[i]===2) botScore += getBaseScore(board, i%SIZE, Math.floor(i/SIZE), 2);
-        else if(board[i]===1) userScore += getBaseScore(board, i%SIZE, Math.floor(i/SIZE), 1);
-    }
-    // 상대의 승리 직전(OPEN_4 등)일 때 점수 격차가 엄청나게 벌어짐.
-    const diff = botScore - userScore;
-    const p = 1 / (1 + Math.exp(-diff / 30000)); 
+    // evaluateBoard(board, 2) 반환값은 봇 관점의 종합 스코어(봇점수 - 적점수)
+    const diff = evaluateBoard(board, 2);
+    // 점수 스케일 확장에 맞춰 정규화 상수 증가
+    const p = 1 / (1 + Math.exp(-diff / 500000)); 
     winProbTrace.push(p);
 }
 
@@ -344,31 +419,73 @@ async function endGame(res) {
     document.getElementById('modal-body').innerText = "기록을 분석하여 신경망을 미세 조정하고 있습니다...";
     
     if(res === 'won') {
-        pushLog(`아앗... 제가 지다니요 😭 확실히 복기해서 다음번엔 똑같은 함정에 안 당할 거예요! 📝`, 'bot-warn');
+        const loseMsgs = [
+            `아앗... 제가 지다니요 😭 확실히 복기해서 다음엔 안 당할 거예요! 📝`,
+            `훌륭한 수였습니다! 제 빈틈을 정확히 파고드셨네요. 다음엔 다를 겁니다! 🔥`,
+            `패배를 인정합니다. 하지만 이 패배는 제 신경망의 훌륭한 거름이 될 거예요! 🌱`
+        ];
+        pushLog(loseMsgs[Math.floor(Math.random()*loseMsgs.length)], 'bot-warn');
     } else if(res === 'lost') {
-        pushLog(`제가 이겼네요! 제 데이터가 제대로 작동하나 봐요 🚀 패턴을 강화합니다!`, 'bot-act');
+        const winMsgs = [
+            `제가 이겼네요! 그동안 학습한 패턴 방어 데이터가 효과를 톡톡히 봤습니다 🚀`,
+            `후후, 제 계산대로 흘러갔군요! 이 승리 패턴은 더 강하게 기억될 겁니다. 😎`,
+            `오목봇의 승리입니다! 당신의 패턴을 거의 다 파악한 것 같네요. 🤖`
+        ];
+        pushLog(winMsgs[Math.floor(Math.random()*winMsgs.length)], 'bot-act');
+    } else {
+        pushLog(`치열한 접전 끝에 무승부군요! 다음엔 꼭 결판을 내요. 🤝`, 'bot-act');
     }
-    pushLog(`기보 데이터를 바탕으로 인공지능 뇌구조를 재공사합니다... 🛠️`, 'bot-nn');
+    pushLog(`이번 대국의 기보를 바탕으로 가중치를 재조정하고 있습니다... 🛠️`, 'bot-nn');
 
     const reward = res === 'lost' ? 1 : (res === 'won' ? -1 : 0);
     let xsData = [], ysData = [];
+    
+    // 8방향 증강(Augmentation) 헬퍼 함수
+    const getAugmented = (flatBoard) => {
+        let results = [];
+        for(let flip=0; flip<2; flip++) {
+            for(let rot=0; rot<4; rot++) {
+                let nb = new Array(225);
+                for(let r=0; r<SIZE; r++) {
+                    for(let c=0; c<SIZE; c++) {
+                        let nr = r, nc = c;
+                        if(flip) nc = SIZE - 1 - c;
+                        for(let k=0; k<rot; k++) {
+                            let tmp = nr;
+                            nr = nc;
+                            nc = SIZE - 1 - tmp;
+                        }
+                        nb[nr * SIZE + nc] = flatBoard[r * SIZE + c];
+                    }
+                }
+                results.push(nb);
+            }
+        }
+        return results;
+    };
+
     gameHistory.forEach((h, i) => {
         if(h.player === 2) {
             let timeFactor = (i + 1) / gameHistory.length; 
             const feat = h.boardState.map(v => v === 1 ? 1 : (v === 2 ? -1 : 0));
-            const meta = [i/225, stats.won/stats.total, stats.total/50, 0.5];
-            xsData.push(feat.concat(meta)); ysData.push([reward * timeFactor]);
+            
+            // 승패를 결정지은 공간 구조를 8개의 각도로 모두 회전/반전시켜 일괄 훈련 데이터에 추가
+            const augmentedFeats = getAugmented(feat);
+            augmentedFeats.forEach(augFeat => {
+                xsData.push(augFeat);
+                ysData.push([reward * timeFactor]);
+            });
         }
     });
 
     if(xsData.length > 0) {
         const xs = tf.tensor2d(xsData), ys = tf.tensor2d(ysData);
         try {
-            const h = await model.fit(xs, ys, { epochs: 3, batchSize: 32 });
+            const h = await model.fit(xs, ys, { epochs: 3, batchSize: 64 });
             let fLoss = h.history.loss[0];
             lossHistory.push(fLoss); 
             localStorage.setItem('gomoku-loss-history', JSON.stringify(lossHistory.slice(-200)));
-            pushLog(`학습 완료! (오차율: ${fLoss.toFixed(4)}) 다음 판에서는 더 똑똑해질 거예요 😎`, 'bot-sys');
+            pushLog(`CNN 8방향 시각 인지 학습 완료! (오차: ${fLoss.toFixed(4)}) 다음엔 각도를 비틀어도 안 속아요 😎`, 'bot-sys');
         } catch(e) {} finally { xs.dispose(); ys.dispose(); }
     }
     
