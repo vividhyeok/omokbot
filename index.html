@@ -47,78 +47,31 @@
         </div>
 
         <div class="panel-section collapsed" id="section-momentum">
-            <div class="section-title">실시간 승률 흐름</div>
+            <div class="section-title">실시간 전황 (수읽기 기반)</div>
             <div class="section-body">
                 <div class="chart-container" id="momentum-chart"></div>
-                <div style="font-size: 0.7rem; color: #888; text-align: center; margin-top: 5px;">현재 판의 주도권</div>
+                <div style="font-size: 0.7rem; color: #888; text-align: center; margin-top: 5px;">현재 판의 객관성(UI) 흐름</div>
             </div>
         </div>
 
-        <div class="panel-section collapsed" id="section-strength">
-            <div class="section-title">봇의 종합 승률 기세</div>
+        <div class="panel-section" id="section-console">
+            <div class="section-title">AI 판단 로그 (강화학습)</div>
             <div class="section-body">
-                <div class="chart-container" id="strength-chart" style="height:40px;"></div>
-                <div style="font-size: 0.7rem; color: #888; text-align: center; margin-top: 2px;">과거 20게임(학습 누적 효과)</div>
-            </div>
-        </div>
-
-        <div class="panel-section collapsed" id="section-monitor">
-            <div class="section-title">봇 성능 모니터링</div>
-            <div class="section-body">
-                <div class="stat-row">
-                    <span>신경망 비중 (Layer 2)</span>
-                    <span id="stat-adaptive" class="stat-val">0%</span>
-                </div>
-                <div class="progress-compact"><div id="bar-adaptive" class="progress-inner"></div></div>
-                <div class="stat-row" style="margin-top:10px">
-                    <span>탐색한 수의 수</span>
-                    <span id="stat-paths" class="stat-val">0</span>
-                </div>
-                <div class="stat-row">
-                    <span>탐색 깊이 (Depth)</span>
-                    <span class="stat-val">2</span>
-                </div>
-                <div class="stat-row">
-                    <span>착수 확신도</span>
-                    <span id="stat-confidence" class="level-badge" style="padding:2px 8px; font-size:0.7rem">N/A</span>
+                <div id="ai-console">
+                    <div class="log-line">대국 준비 완료. 유저 패턴 분석 준비됨...</div>
                 </div>
             </div>
         </div>
 
         <div class="panel-section collapsed" id="section-loss">
-            <div class="section-title">학습 상태 (현재 오차)</div>
+            <div class="section-title">신경망 오차 (Loss) 변화</div>
             <div class="section-body">
                 <div class="stat-row">
-                    <span>오차 (Loss)</span>
+                    <span>최종 손실률 (낮을수록 좋음)</span>
                     <span id="stat-loss" class="stat-val">N/A</span>
                 </div>
                 <div class="chart-container" id="loss-chart"></div>
-            </div>
-        </div>
-
-        <div class="panel-section collapsed" id="section-radar">
-            <div class="section-title">당신의 플레이 스타일</div>
-            <div class="section-body">
-                <div class="chart-container" id="radar-chart" style="height: 180px;"></div>
-            </div>
-        </div>
-
-        <div class="panel-section collapsed" id="section-read">
-            <div class="section-title">AI가 분석한 당신의 성향</div>
-            <div class="section-body">
-                <div style="display:flex; gap:15px; align-items:flex-start;">
-                    <div id="quadrant-grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:2px; width:45px; background:#ddd; padding:2px;"></div>
-                    <div style="flex:1">
-                        <div id="read-quadrant" style="font-size: 0.85rem; font-weight: 600;">분석 중...</div>
-                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top:2px;">주요 착수 구역</div>
-                    </div>
-                </div>
-                <div id="tendency-container" style="margin-top:12px;"></div>
-                <div class="stat-row" style="margin-top:15px">
-                    <span>당신을 향한 전략 적응도</span>
-                    <span id="stat-adapt-total" class="stat-val">0%</span>
-                </div>
-                <div class="progress-compact"><div id="bar-adapt-total" class="progress-inner" style="background:#10b981"></div></div>
+                <div style="font-size: 0.7rem; color: #888; text-align: center; margin-top: 5px;">과거 대국을 통한 오차 수정 이력</div>
             </div>
         </div>
     </aside>

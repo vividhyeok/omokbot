@@ -8,11 +8,24 @@ let winProbTrace = [0.5];
 
 // LocalStorage 값 파싱
 let stats = JSON.parse(localStorage.getItem('gomoku-stats')) || { won: 0, lost: 0, draws: 0, total: 0 }; 
-let profile = JSON.parse(localStorage.getItem('gomoku-player-profile')) || { quadrant_bias: '중앙', attack: 50, defense: 50, center: 50, edge: 50, speed: 50 };
 let lossHistory = JSON.parse(localStorage.getItem('gomoku-loss-history')) || [];
 let winProbHistory = JSON.parse(localStorage.getItem('gomoku-winprob-history')) || [];
 let heatmapEnabled = false, isThinking = false, model = null, modelReady = false;
 let hoverPos = null; 
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function pushLog(msg, type='log-sys') {
+    const c = document.getElementById('ai-console');
+    const d = document.createElement('div');
+    d.className = `log-line ${type}`;
+    // 시간 추가
+    const now = new Date();
+    const t = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+    d.innerHTML = `[${t}] ${msg}`;
+    c.appendChild(d);
+    c.scrollTop = c.scrollHeight;
+}
 
 const canvas = document.getElementById('board-canvas'), ctx = canvas.getContext('2d');
 canvas.width = canvas.height = CANVAS_SIZE;
@@ -199,13 +212,14 @@ async function userMove(x, y) {
     if(checkWin(x, y, 1)) return endGame('won'); 
     if(board.every(v => v !== 0)) return endGame('draw'); 
     isThinking = true; updateProb(); updateUI();
-    setTimeout(botMove, 200); 
+    botMove(); // 비동기로 자체 실행
 }
 
 async function botMove() {
+    pushLog(`유저 착수 완료. 후보 탐색 중...`, 'log-sys');
+    await sleep(400);
+
     let cans = getCandidates(board);
-    document.getElementById('stat-paths').innerText = cans.length + "개 검토";
-    
     let scoredCans = [];
     // 1단계: 순수 상태 평가로 모든 후보 평가 (딥 서치 제거 - 트랩에 취약해짐)
     for(let idx of cans) {
@@ -215,47 +229,49 @@ async function botMove() {
         scoredCans.push({idx, rawScore});
     }
     
-    // 상위 15개 후보 추리기 (너무 큰 차이는 어차피 안둠)
+    // 상위 15개 후보 추리기
     scoredCans.sort((a,b) => b.rawScore - a.rawScore);
     let topCans = scoredCans.slice(0, 15);
     
+    pushLog(`기본 규칙(본능)에 의한 최상위 후보: (${topCans[0].idx%SIZE}, ${Math.floor(topCans[0].idx/SIZE)})`, 'log-sys');
+    await sleep(400);
+    pushLog(`과거 데이터를 바탕으로 강화학습 신경망 개입 중...`, 'log-warn');
+    await sleep(600);
+
     // 2단계: 상위 후보들에 대해 신경망(Layer 2) 일괄 예측
     let topIndices = topCans.map(c => c.idx);
     let mods = await getAdaptiveModifiersForCandidates(board, topIndices);
     
-    let best = -1, maxS = -Infinity, secondS = -Infinity;
-    let avgModAbs = 0;
+    let best = -1, maxS = -Infinity;
+    let originalBest = topCans[0].idx;
+    let chosenMod = 0;
 
     for(let i=0; i<topCans.length; i++) {
         let rawScore = topCans[i].rawScore;
         let mod = mods[i]; 
-        avgModAbs += Math.abs(mod);
         
-        // 신경망 개입: 휴리스틱 점수에 유의미한 보정치 합산 (8000점: 강압적인 4목은 무시하지 않으나, 3목 싸움은 완벽히 뒤집을 수 있는 스케일)
+        // 신경망 개입: 휴리스틱 점수에 유의미한 보정치 합산
         let blendedScore = rawScore + (mod * 8000); 
         
         // 확정적인 승/패 방어는 건드리지 않음
         if (Math.abs(rawScore) > PATTERNS.WIN * 0.5) blendedScore = rawScore;
         
         if(blendedScore > maxS) { 
-            secondS = maxS;
             maxS = blendedScore; 
             best = topCans[i].idx; 
-        } else if (blendedScore > secondS) {
-            secondS = blendedScore;
+            chosenMod = mod;
         }
     }
     
-    avgModAbs /= topCans.length;
-    document.getElementById('stat-adaptive').innerText = Math.round(avgModAbs * 100) + '%';
-    document.getElementById('bar-adaptive').style.width = Math.round(avgModAbs * 100) + '%';
-    
-    if (secondS === -Infinity || secondS === 0) secondS = 1;
-    let confidenceRatio = maxS / secondS;
-    let confEl = document.getElementById('stat-confidence');
-    if (confidenceRatio > 2.0) { confEl.innerText = "High"; confEl.className = "level-badge level-high"; }
-    else if (confidenceRatio > 1.2) { confEl.innerText = "Mid"; confEl.className = "level-badge level-mid"; }
-    else { confEl.innerText = "Low"; confEl.className = "level-badge level-low"; }
+    if (best !== originalBest) {
+        pushLog(`강화학습 회피 기동! 과거 경험에 의해 기본 규칙안을 폐기합니다. 가중치 보정됨.`, 'log-nn');
+        await sleep(300);
+        pushLog(`[채택] 대체 좌표 (${best%SIZE}, ${Math.floor(best/SIZE)}) 로 선회.`, 'log-act');
+    } else {
+        pushLog(`현재 패턴에 특이점 없음. 기본 규칙안(${best%SIZE}, ${Math.floor(best/SIZE)})을 확정합니다.`, 'log-act');
+    }
+
+    await sleep(300);
 
     if(best !== -1) {
         makeMove(best % SIZE, Math.floor(best / SIZE), 2);
@@ -304,12 +320,13 @@ async function endGame(res) {
     winProbHistory.push(avgProb);
     localStorage.setItem('gomoku-winprob-history', JSON.stringify(winProbHistory.slice(-20)));
     
-    updateProfile(); 
-    
     document.getElementById('modal-overlay').style.display = 'flex';
     document.getElementById('modal-title').innerText = res === 'won' ? "당신의 승리!" : (res === 'lost' ? "봇의 승리!" : "무승부!");
     document.getElementById('modal-body').innerText = "기록을 분석하여 신경망을 미세 조정하고 있습니다...";
     
+    pushLog(`[게임 종료] 결과: ${res === 'won' ? '봇 패배(-1)' : (res === 'lost' ? '봇 승리(+1)' : '무승부')}`, 'log-warn');
+    pushLog(`기보 데이터를 바탕으로 강화학습 신경망을 업데이트합니다...`, 'log-nn');
+
     const reward = res === 'lost' ? 1 : (res === 'won' ? -1 : 0);
     let xsData = [], ysData = [];
     gameHistory.forEach((h, i) => {
@@ -325,8 +342,10 @@ async function endGame(res) {
         const xs = tf.tensor2d(xsData), ys = tf.tensor2d(ysData);
         try {
             const h = await model.fit(xs, ys, { epochs: 3, batchSize: 32 });
-            lossHistory.push(h.history.loss[0]); 
+            let fLoss = h.history.loss[0];
+            lossHistory.push(fLoss); 
             localStorage.setItem('gomoku-loss-history', JSON.stringify(lossHistory.slice(-50)));
+            pushLog(`학습 완료. 최종 Loss: ${fLoss.toFixed(4)}`, 'log-act');
         } catch(e) {} finally { xs.dispose(); ys.dispose(); }
     }
     
@@ -335,38 +354,7 @@ async function endGame(res) {
     updateUI();
 }
 
-function updateProfile() {
-    const qs = [0,0,0,0,0]; let centerMoves = 0, edgeMoves = 0;
-    gameHistory.filter(h => h.player === 1).forEach(h => { 
-        if(h.x>=4 && h.x<=10 && h.y>=4 && h.y<=10) qs[4]++; 
-        else if(h.x<7.5 && h.y<7.5) qs[0]++; else if(h.x>=7.5 && h.y<7.5) qs[1]++; else if(h.x<7.5 && h.y>=7.5) qs[2]++; else qs[3]++; 
-        if (h.x > 3 && h.x < 11 && h.y > 3 && h.y < 11) centerMoves++; else edgeMoves++;
-    });
-    const maxQ = qs.indexOf(Math.max(...qs, -1)); 
-    profile.quadrant_bias = ['좌상단','우상단','좌하단','우하단','중앙'][maxQ] || '불명';
-    
-    let hw = gameHistory.filter(h => h.player === 1).length || 1;
-    profile.center = Math.min(100, (centerMoves / hw) * 100 * 1.5);
-    profile.edge = Math.min(100, (edgeMoves / hw) * 100 * 1.5);
-    profile.attack = Math.min(100, 50 + (stats.won / (stats.total||1)) * 50);
-    profile.defense = Math.max(0, 100 - profile.attack);
-    profile.speed = 100 - Math.min(50, Math.floor(hw / 2)); 
-    localStorage.setItem('gomoku-player-profile', JSON.stringify(profile));
-    
-    document.getElementById('read-quadrant').innerText = profile.quadrant_bias + " 집중 플레이";
-    const qg = document.getElementById('quadrant-grid'); qg.innerHTML = '';
-    for(let i=0; i<9; i++) { 
-        let d = document.createElement('div'); d.style.height = '13px'; 
-        d.style.background = (i === [0,2,6,8,4][maxQ]) ? 'var(--accent-red)' : '#eee'; qg.appendChild(d); 
-    }
 
-    let tagsHTML = '';
-    if(profile.attack > 60) tagsHTML += `<span class="tendency-tag">공격적 성향</span>`;
-    if(profile.defense > 60) tagsHTML += `<span class="tendency-tag">수비 위주</span>`;
-    if(profile.center > 60) tagsHTML += `<span class="tendency-tag">중앙 장악력 중시</span>`;
-    if(profile.edge > 60) tagsHTML += `<span class="tendency-tag">외곽 변칙 플레이</span>`;
-    document.getElementById('tendency-container').innerHTML = tagsHTML;
-}
 
 // ==========================================
 // 렌더링
@@ -406,42 +394,51 @@ function renderBoard() {
 
 let currentHeatmapData = null;
 
-function recalculateHeatmap() {
+async function recalculateHeatmap() {
     if(!heatmapEnabled) return;
-    let topCells = [];
-    for(let i=0; i<SIZE*SIZE; i++) {
-        if(board[i]===0) {
-            board[i]=1; 
-            // 유저의 수(1)를 두고 봇이 반격(true)했을 때의 봇 관점 점수
-            let s = godModeEvaluate(board, 1, -Infinity, Infinity, true); 
-            board[i]=0; 
-            // 유저 입장에서 얼마나 유리한가? = 봇의 입장에서 얼마나 불리한가(-s)
-            topCells.push({idx: i, score: -s});
-        }
+    let emptyIdxs = [];
+    for(let i=0; i<SIZE*SIZE; i++) if(board[i] === 0) emptyIdxs.push(i);
+    
+    if (emptyIdxs.length === 0) return;
+    
+    // 비동기 일괄 예측
+    let mods = await getAdaptiveModifiersForCandidates(board, emptyIdxs);
+    let cells = [];
+    for(let i=0; i<emptyIdxs.length; i++) {
+        // mod 값은 -1.0 ~ 1.0. 
+        // 봇에게 좋은 자리(추천)는 +, 피해야 할 곳(함정)은 -
+        cells.push({idx: emptyIdxs[i], score: mods[i]}); 
     }
-    topCells.sort((a,b) => b.score - a.score);
-    currentHeatmapData = topCells.length > 0 && topCells[0].score > 0 ? topCells : null;
+    cells.sort((a,b) => b.score - a.score);
+    currentHeatmapData = cells;
+    renderBoard(); // 비동기이므로 끝난 후 다시 렌더해줌
 }
 
 function renderHeatmap() {
     if(!currentHeatmapData) return;
-    let topCells = currentHeatmapData;
-    let max = topCells[0].score;
-    let top3Sum = topCells.slice(0,3).reduce((acc, c) => acc + c.score, 0) || 1;
+    let cells = currentHeatmapData;
 
-    topCells.forEach((c)=>{
+    cells.forEach((c) => {
         let {idx: i, score: s} = c;
-        if(s < max*0.2) return; 
+        if(Math.abs(s) < 0.1) return; // 무의미한 가중치는 렌더링 생략
+        
         const x = PAD + (i%SIZE)*CELL, y = PAD + Math.floor(i/SIZE)*CELL;
-        ctx.fillStyle = `rgba(255,0,0,${(s/max)*0.6})`; 
+        
+        // 긍정적 보상(녹색 계열), 부정적 보상(보라/마젠타 계열)
+        if (s > 0) {
+            ctx.fillStyle = `rgba(16, 185, 129, ${s * 0.7})`; // Green
+        } else {
+            ctx.fillStyle = `rgba(168, 85, 247, ${Math.abs(s) * 0.7})`; // Purple
+        }
         ctx.fillRect(x+1, y+1, CELL-2, CELL-2);
         
-        let rankIdx = topCells.findIndex(tc => tc.idx === i);
-        if(top3Sum > 0) {
+        // 유의미한 수치 표시
+        if(Math.abs(s) > 0.3) {
             ctx.fillStyle = 'white';
             ctx.font = '10px Inter';
             ctx.textAlign = 'center';
-            ctx.fillText(`${Math.round((s/top3Sum)*100)}%`, x+CELL/2, y+CELL/2 + 3);
+            let pct = Math.round(s * 100);
+            ctx.fillText((pct > 0 ? '+' : '') + pct + '%', x+CELL/2, y+CELL/2 + 3);
         }
     });
 }
@@ -455,46 +452,24 @@ function updateUI() {
     const p = winProbTrace[winProbTrace.length-1] || 0.5;
     document.getElementById('prob-user').style.width = (1-p)*100 + '%'; document.getElementById('prob-user').innerText = `당신 ${Math.round((1-p)*100)}%`;
     document.getElementById('prob-bot').innerText = `봇 ${Math.round(p*100)}%`;
-    const ad = Math.min(100, Math.floor(stats.total/15*100)); 
-    document.getElementById('stat-adapt-total').innerText = ad+'%'; document.getElementById('bar-adapt-total').style.width = ad+'%';
-    
     renderCharts();
 }
 
-function polar(cx, cy, r, deg) { const rad = (deg-90)*Math.PI/180; return {x: cx+r*Math.cos(rad), y: cy+r*Math.sin(rad)}; }
 function renderCharts() {
     const m = document.getElementById('momentum-chart'); 
-    let d = `M 0 ${80-(winProbTrace[0]*80)}`;
-    for(let i=1; i<winProbTrace.length; i++) d += ` L ${(i/(winProbTrace.length-1))*320} ${80-(winProbTrace[i]*80)}`;
-    m.innerHTML = `<svg viewBox="-5 0 330 80" class="chart-svg"><line x1="0" y1="40" x2="320" y2="40" stroke="#ddd" stroke-dasharray="4"/><path d="${d}" fill="none" stroke="${winProbTrace.at(-1)>0.5?'#ef4444':'#3b82f6'}" stroke-width="2.5"/></svg>`;
-
-    const sc = document.getElementById('strength-chart');
-    if(winProbHistory.length) {
-        let sd = `M 0 ${40 - winProbHistory[0]*40}`;
-        winProbHistory.forEach((v,i) => sd += ` L ${(i/Math.max(1, winProbHistory.length-1))*320} ${40 - v*40}`);
-        sc.innerHTML = `<svg viewBox="-5 0 330 40" class="chart-svg"><line x1="0" y1="20" x2="320" y2="20" stroke="#ddd" stroke-dasharray="2"/><path d="${sd}" fill="none" stroke="#f59e0b" stroke-width="2"/></svg>`;
+    if (m) {
+        let d = `M 0 ${80-(winProbTrace[0]*80)}`;
+        for(let i=1; i<winProbTrace.length; i++) d += ` L ${(i/(winProbTrace.length-1))*320} ${80-(winProbTrace[i]*80)}`;
+        m.innerHTML = `<svg viewBox="-5 0 330 80" class="chart-svg"><line x1="0" y1="40" x2="320" y2="40" stroke="#ddd" stroke-dasharray="4"/><path d="${d}" fill="none" stroke="${winProbTrace.at(-1)>0.5?'#ef4444':'#3b82f6'}" stroke-width="2.5"/></svg>`;
     }
 
     const l = document.getElementById('loss-chart'); 
-    if(lossHistory.length) { 
+    if(l && lossHistory.length) { 
         let ld = `M 0 80`; let maxL = Math.max(...lossHistory, 0.05); let slice = lossHistory.slice(-10);
         slice.forEach((v,i) => ld += ` L ${(i/Math.max(1, slice.length-1))*320} ${80-(v/maxL)*70}`);
         l.innerHTML = `<svg viewBox="-5 0 330 80" class="chart-svg"><path d="${ld}" fill="none" stroke="#ef4444" stroke-width="2"/></svg>`; 
         document.getElementById('stat-loss').innerText = lossHistory.at(-1).toFixed(4); 
     }
-    
-    const r = document.getElementById('radar-chart'); 
-    const features = ['공격성', '수비력', '중앙', '외곽', '반응속도'];
-    const values = [profile.attack||50, profile.defense||50, profile.center||50, profile.edge||50, profile.speed||50];
-    let rG = '', rP = '', rL = ''; const cx = 160, cy = 90, radius = 60;
-    for(let lvl=1; lvl<=3; lvl++) {
-        let pts = features.map((_, i) => polar(cx, cy, radius*(lvl/3), i*72));
-        rG += `<polygon points="${pts.map(p=>`${p.x},${p.y}`).join(' ')}" fill="none" stroke="#eee" stroke-width="1"/>`;
-    }
-    let dPts = values.map((v, i) => polar(cx, cy, radius*(v/100), i*72));
-    rP = `<polygon points="${dPts.map(p=>`${p.x},${p.y}`).join(' ')}" fill="rgba(59,130,246,0.3)" stroke="#3b82f6" stroke-width="2"/>`;
-    features.forEach((f, i) => { let p = polar(cx, cy, radius+20, i*72); rL += `<text x="${p.x}" y="${p.y+4}" font-size="10" text-anchor="middle" fill="#666">${f}</text>`; });
-    r.innerHTML = `<svg viewBox="0 0 320 180" class="chart-svg">${rG}${rP}${rL}</svg>`;
 }
 
 // ==========================================
@@ -589,7 +564,7 @@ document.getElementById('btn-start-load').addEventListener('click', () => {
 
 // 최초 실행 및 초기 상태
 isThinking = true; // 모달을 닫기 전까지는 착수 제한
-updateProfile(); initModel(); recalculateHeatmap(); renderBoard();
+initModel(); recalculateHeatmap(); renderBoard();
 window.addEventListener('resize', () => {
     renderBoard();
 });

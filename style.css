@@ -190,6 +190,30 @@ canvas {
 .btn-outline:hover { background: #f9f9f9; border-color: #ccc; }
 
 
+/* AI Console Styling */
+#ai-console {
+    background: #1e1e1e;
+    color: #e2e8f0;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.8rem;
+    padding: 10px;
+    height: 180px;
+    overflow-y: auto;
+    border-radius: 6px;
+    border: 1px solid #333;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.log-line {
+    word-break: keep-all;
+    line-height: 1.35;
+}
+.log-sys { color: #94a3b8; }
+.log-nn { color: #c084fc; font-weight: bold; }
+.log-act { color: #10b981; font-weight: bold; }
+.log-warn { color: #fbbf24; }
+
 footer {
     background: #eee;
     padding: 0.5rem 2rem;
