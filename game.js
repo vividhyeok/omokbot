@@ -308,9 +308,14 @@ function checkWin(x, y, p) {
 }
 
 function updateProb() {
-    // UI 로직: 깊은 수읽기를 사용하여 현재 보드의 '진짜' 승률 계산
-    const s = godModeEvaluate(board, 1, -Infinity, Infinity, true); 
-    const p = 1 / (1 + Math.exp(-s / 100000)); 
+    let botScore = 0, userScore = 0;
+    for(let i=0; i<SIZE*SIZE; i++) {
+        if(board[i]===2) botScore += getBaseScore(board, i%SIZE, Math.floor(i/SIZE), 2);
+        else if(board[i]===1) userScore += getBaseScore(board, i%SIZE, Math.floor(i/SIZE), 1);
+    }
+    // 상대의 승리 직전(OPEN_4 등)일 때 점수 격차가 엄청나게 벌어짐.
+    const diff = botScore - userScore;
+    const p = 1 / (1 + Math.exp(-diff / 30000)); 
     winProbTrace.push(p);
 }
 
@@ -339,7 +344,7 @@ async function endGame(res) {
     document.getElementById('modal-body').innerText = "기록을 분석하여 신경망을 미세 조정하고 있습니다...";
     
     if(res === 'won') {
-        pushLog(`아앗... 제가 짓다니요 😭 확실히 복기해서 다음번엔 똑같은 함정에 안 당할 거예요! 📝`, 'bot-warn');
+        pushLog(`아앗... 제가 지다니요 😭 확실히 복기해서 다음번엔 똑같은 함정에 안 당할 거예요! 📝`, 'bot-warn');
     } else if(res === 'lost') {
         pushLog(`제가 이겼네요! 제 데이터가 제대로 작동하나 봐요 🚀 패턴을 강화합니다!`, 'bot-act');
     }
@@ -556,7 +561,13 @@ function importMemory(event) {
 // 버튼 및 UI 이벤트 등록
 // ==========================================
 document.getElementById('btn-play-again').onclick = () => { board = Array(SIZE * SIZE).fill(0); gameHistory = []; winProbTrace = [0.5]; document.getElementById('modal-overlay').style.display = 'none'; isThinking = false; recalculateHeatmap(); renderBoard(); updateUI(); };
-document.getElementById('btn-toggle-heatmap').onclick = () => { heatmapEnabled = !heatmapEnabled; document.getElementById('btn-toggle-heatmap').innerText = `예측 맵: ${heatmapEnabled ? '켜짐' : '끄기'}`; recalculateHeatmap(); renderBoard(); };
+document.getElementById('btn-toggle-heatmap').onclick = () => { 
+    heatmapEnabled = !heatmapEnabled; 
+    document.getElementById('btn-toggle-heatmap').innerText = `AI 뇌구조 맵: ${heatmapEnabled ? '켜짐' : '끄기'}`; 
+    document.getElementById('heatmap-legend').style.display = heatmapEnabled ? 'block' : 'none';
+    recalculateHeatmap(); 
+    renderBoard(); 
+};
 document.getElementById('btn-reset').onclick = () => { if(confirm("모든 기억과 승률 데이터를 지우시겠습니까?")) { localStorage.clear(); location.reload(); } };
 document.getElementById('btn-export').onclick = () => { exportMemory(); };
 document.getElementById('import-file').addEventListener('change', importMemory);
