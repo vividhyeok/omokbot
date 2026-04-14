@@ -2,9 +2,9 @@
 // 설정 및 상태
 // ==========================================
 const SIZE = 15, CELL = 35, PAD = 20, CANVAS_SIZE = SIZE * CELL + PAD * 2;
-let board = Array(SIZE * SIZE).fill(0);
-let gameHistory = []; // {idx, player, time, boardState[]}
-let winProbTrace = [0.5];
+let board = JSON.parse(localStorage.getItem('gomoku-ongoing-board')) || Array(SIZE * SIZE).fill(0);
+let gameHistory = JSON.parse(localStorage.getItem('gomoku-ongoing-history')) || []; 
+let winProbTrace = JSON.parse(localStorage.getItem('gomoku-ongoing-prob')) || [0.5];
 
 // LocalStorage 값 파싱
 let stats = JSON.parse(localStorage.getItem('gomoku-stats')) || { won: 0, lost: 0, draws: 0, total: 0 }; 
@@ -288,6 +288,12 @@ async function botMove() {
 function makeMove(x, y, p) {
     board[y*SIZE+x] = p;
     gameHistory.push({idx: y*SIZE+x, x, y, player: p, time: Date.now(), boardState: [...board]});
+    
+    // 진행 상황 로컬 스토리지에 자동 저장 (새로고침 방어)
+    localStorage.setItem('gomoku-ongoing-board', JSON.stringify(board));
+    localStorage.setItem('gomoku-ongoing-history', JSON.stringify(gameHistory));
+    localStorage.setItem('gomoku-ongoing-prob', JSON.stringify(winProbTrace));
+
     recalculateHeatmap();
     renderBoard();
 }
@@ -319,6 +325,11 @@ async function endGame(res) {
     stats.total++; 
     localStorage.setItem('gomoku-stats', JSON.stringify(stats));
     
+    // 게임 종료 시 저장된 진행 상황 초기화
+    localStorage.removeItem('gomoku-ongoing-board');
+    localStorage.removeItem('gomoku-ongoing-history');
+    localStorage.removeItem('gomoku-ongoing-prob');
+
     const avgProb = winProbTrace.reduce((a,b)=>a+b, 0) / winProbTrace.length;
     winProbHistory.push(avgProb);
     localStorage.setItem('gomoku-winprob-history', JSON.stringify(winProbHistory.slice(-20)));
@@ -351,7 +362,7 @@ async function endGame(res) {
             const h = await model.fit(xs, ys, { epochs: 3, batchSize: 32 });
             let fLoss = h.history.loss[0];
             lossHistory.push(fLoss); 
-            localStorage.setItem('gomoku-loss-history', JSON.stringify(lossHistory.slice(-50)));
+            localStorage.setItem('gomoku-loss-history', JSON.stringify(lossHistory.slice(-200)));
             pushLog(`학습 완료! (오차율: ${fLoss.toFixed(4)}) 다음 판에서는 더 똑똑해질 거예요 😎`, 'bot-sys');
         } catch(e) {} finally { xs.dispose(); ys.dispose(); }
     }
@@ -455,7 +466,7 @@ function updateUI() {
     const lv = Math.min(10, Math.floor(stats.total/5)+1); const b = document.getElementById('bot-level');
     b.innerText = `Lv ${lv}: ${['','초보','적응 중','중수','숙련자','전문가','알파오목'][Math.min(6, Math.floor(lv/2)+1)]}`;
     b.className = `level-badge ${lv<4?'level-low':lv<7?'level-mid':'level-high'}`;
-    document.getElementById('history-text').innerText = `전적: ${stats.won}승 ${stats.draws}무 ${stats.lost}패`;
+    document.getElementById('history-text').innerText = `총 ${stats.total}판 중 ${stats.won}승 ${stats.lost}패 ${stats.draws}무`;
     const p = winProbTrace[winProbTrace.length-1] || 0.5;
     document.getElementById('prob-user').style.width = (1-p)*100 + '%'; document.getElementById('prob-user').innerText = `당신 ${Math.round((1-p)*100)}%`;
     document.getElementById('prob-bot').innerText = `봇 ${Math.round(p*100)}%`;
@@ -472,7 +483,7 @@ function renderCharts() {
 
     const l = document.getElementById('loss-chart'); 
     if(l && lossHistory.length) { 
-        let ld = `M 0 80`; let maxL = Math.max(...lossHistory, 0.05); let slice = lossHistory.slice(-10);
+        let ld = `M 0 80`; let maxL = Math.max(...lossHistory, 0.05); let slice = lossHistory.slice(-200);
         slice.forEach((v,i) => ld += ` L ${(i/Math.max(1, slice.length-1))*320} ${80-(v/maxL)*70}`);
         l.innerHTML = `<svg viewBox="-5 0 330 80" class="chart-svg"><path d="${ld}" fill="none" stroke="#ef4444" stroke-width="2"/></svg>`; 
         document.getElementById('stat-loss').innerText = lossHistory.at(-1).toFixed(4); 
@@ -544,7 +555,7 @@ function importMemory(event) {
 // ==========================================
 // 버튼 및 UI 이벤트 등록
 // ==========================================
-document.getElementById('btn-play-again').onclick = () => { board.fill(0); gameHistory = []; winProbTrace = [0.5]; document.getElementById('modal-overlay').style.display = 'none'; isThinking = false; recalculateHeatmap(); renderBoard(); updateUI(); };
+document.getElementById('btn-play-again').onclick = () => { board = Array(SIZE * SIZE).fill(0); gameHistory = []; winProbTrace = [0.5]; document.getElementById('modal-overlay').style.display = 'none'; isThinking = false; recalculateHeatmap(); renderBoard(); updateUI(); };
 document.getElementById('btn-toggle-heatmap').onclick = () => { heatmapEnabled = !heatmapEnabled; document.getElementById('btn-toggle-heatmap').innerText = `예측 맵: ${heatmapEnabled ? '켜짐' : '끄기'}`; recalculateHeatmap(); renderBoard(); };
 document.getElementById('btn-reset').onclick = () => { if(confirm("모든 기억과 승률 데이터를 지우시겠습니까?")) { localStorage.clear(); location.reload(); } };
 document.getElementById('btn-export').onclick = () => { exportMemory(); };
