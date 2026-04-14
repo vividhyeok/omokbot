@@ -51,9 +51,6 @@
 #### 플레이어 스타일 분석
 봇은 당신의 패턴도 분류합니다. 어느 방향을 선호하는지, 귀와 중앙 중 어디에 집중하는지, 공격형인지 수비형인지, 열린 3을 막는 데 얼마나 실패하는지. 이 데이터는 레이더 차트로 시각화되고, 자연어 태그로도 표시됩니다. 봇은 이 분석을 바탕으로 전략을 조정합니다.
 
-#### 수 품질 피드백
-당신이 돌을 놓을 때마다, 그 수가 최선 대비 얼마나 좋은 수였는지 짧게 알려줍니다. 최선의 수를 뒀다면 초록 뱃지가, 놓쳤다면 더 좋았을 칸이 잠깐 강조됩니다. 봇만 학습하는 게 아니라 당신도 같이 성장하는 구조입니다.
-
 ### 기술적 특징
 
 - 백엔드 없음 — 완전한 클라이언트 사이드 동작
@@ -129,9 +126,6 @@ The side panel displays the following real-time data:
 
 #### Player Style Profiling
 The bot classifies your habits: whether you prefer corners over the center, favor aggressive lines or defensive blocks, or fail to catch open 3s. This is plotted onto a dynamic SVG radar chart along with natural-language tendency tags. The bot uses this exact profile to pivot its neural predictions.
-
-#### Move Quality Feedback
-Whenever you drop a stone, a micro-badge lets you know how your move measured up against the mathematically best possible move. Catching a perfect block shows a green badge; missing a lethal threat highlights the cell you *should* have played instead.
 
 ### Technical Details
 

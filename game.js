@@ -12,7 +12,7 @@ let profile = JSON.parse(localStorage.getItem('gomoku-player-profile')) || { qua
 let lossHistory = JSON.parse(localStorage.getItem('gomoku-loss-history')) || [];
 let winProbHistory = JSON.parse(localStorage.getItem('gomoku-winprob-history')) || [];
 let heatmapEnabled = false, isThinking = false, model = null, modelReady = false;
-let missedOpportunityCell = -1, hoverPos = null; 
+let hoverPos = null; 
 
 const canvas = document.getElementById('board-canvas'), ctx = canvas.getContext('2d');
 canvas.width = canvas.height = CANVAS_SIZE;
@@ -194,7 +194,6 @@ canvas.addEventListener('mouseout', () => {
 
 async function userMove(x, y) {
     hoverPos = null;
-    flashQualityBadge(x, y); 
     makeMove(x, y, 1);
     if(checkWin(x, y, 1)) return endGame('won'); 
     if(board.every(v => v !== 0)) return endGame('draw'); 
@@ -287,42 +286,7 @@ function updateProb() {
     winProbTrace.push(p);
 }
 
-function flashQualityBadge(x, y) {
-    let maxS = -Infinity, bestMoveIdx = -1;
-    board[y*SIZE+x] = 0;
-    let cans = getCandidates(board);
-    for(let idx of cans) {
-        board[idx] = 1;
-        let s = evaluateBoard(board, 1);
-        board[idx] = 0;
-        if(s > maxS) { maxS = s; bestMoveIdx = idx; }
-    }
-    
-    board[y*SIZE+x] = 1;
-    let userS = evaluateBoard(board, 1);
-    board[y*SIZE+x] = 0; 
 
-    let lbl = "완벽해요! ✓", clr = "#10b981";
-    if(userS < maxS * 0.6) { 
-        lbl = "치명적 실수!"; clr = "#ef4444"; 
-        missedOpportunityCell = bestMoveIdx; 
-    }
-    else if(userS < maxS * 0.9) { lbl = "아쉬운 수"; clr = "#f59e0b"; }
-
-    const b = document.createElement('div'); 
-    b.className = 'move-badge badge-show'; b.style.backgroundColor = clr; b.style.color = 'white'; b.innerText = lbl;
-    document.getElementById('badge-overlay').appendChild(b); 
-    
-    if (missedOpportunityCell !== -1) {
-        renderBoard(); 
-        setTimeout(() => { missedOpportunityCell = -1; renderBoard(); }, 1500);
-    }
-
-    setTimeout(() => {
-        b.style.opacity = '0';
-        setTimeout(() => b.remove(), 300);
-    }, 1500);
-}
 
 // ==========================================
 // 종료, 학습 및 갱신
@@ -434,13 +398,6 @@ function renderBoard() {
         ctx.beginPath(); ctx.arc(hx,hy,15,0,7); ctx.fill();
     }
 
-    if(missedOpportunityCell !== -1) {
-        let mx = PAD + (missedOpportunityCell % SIZE) * CELL;
-        let my = PAD + Math.floor(missedOpportunityCell / SIZE) * CELL;
-        ctx.fillStyle = 'rgba(16, 185, 129, 0.5)'; 
-        ctx.fillRect(mx+1, my+1, CELL-2, CELL-2);
-    }
-    
     if(heatmapEnabled) renderHeatmap();
 }
 
@@ -464,7 +421,7 @@ function renderHeatmap() {
         ctx.fillRect(x+1, y+1, CELL-2, CELL-2);
         
         let rankIdx = topCells.findIndex(tc => tc.idx === i);
-        if(rankIdx < 3 && top3Sum > 0) {
+        if(top3Sum > 0) {
             ctx.fillStyle = 'white';
             ctx.font = '10px Inter';
             ctx.textAlign = 'center';

@@ -189,28 +189,6 @@ canvas {
 .btn-outline { background: transparent; border: 1px solid #ddd; color: var(--text-secondary); box-sizing: border-box; }
 .btn-outline:hover { background: #f9f9f9; border-color: #ccc; }
 
-#badge-overlay {
-    position: absolute;
-    top: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    pointer-events: none;
-    z-index: 20;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-}
-.move-badge {
-    padding: 6px 16px;
-    border-radius: 8px;
-    font-weight: 700;
-    opacity: 0;
-    transform: translateY(-20px);
-    transition: all 0.3s;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-}
-.badge-show { opacity: 1; transform: translateY(0); }
 
 footer {
     background: #eee;
