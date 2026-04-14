@@ -81,34 +81,9 @@ function evaluateBoard(b, targetPlayer) {
     let s = 0;
     for(let i=0; i<SIZE*SIZE; i++) {
         if(b[i] === targetPlayer) s += getBaseScore(b, i % SIZE, Math.floor(i / SIZE), targetPlayer);
-        else if(b[i] !== 0) s -= getBaseScore(b, i % SIZE, Math.floor(i / SIZE), b[i]) * 0.95; 
+        else if(b[i] !== 0) s -= getBaseScore(b, i % SIZE, Math.floor(i / SIZE), b[i]) * 1.2; 
     }
     return s;
-}
-
-function alphaBeta(b, depth, alpha, beta, maximizingPlayer) {
-    let s = evaluateBoard(b, 2);
-    if(depth === 0 || Math.abs(s) > PATTERNS.WIN*0.5) return s;
-    let candidates = getCandidates(b);
-    if(candidates.length === 0) return 0;
-
-    if(maximizingPlayer) { 
-        let maxV = -Infinity;
-        for(let idx of candidates) {
-            b[idx] = 2; let v = alphaBeta(b, depth - 1, alpha, beta, false); b[idx] = 0;
-            maxV = Math.max(maxV, v); alpha = Math.max(alpha, v);
-            if(beta <= alpha) break; 
-        }
-        return maxV;
-    } else { 
-        let minV = Infinity;
-        for(let idx of candidates) {
-            b[idx] = 1; let v = alphaBeta(b, depth - 1, alpha, beta, true); b[idx] = 0;
-            minV = Math.min(minV, v); beta = Math.min(beta, v);
-            if(beta <= alpha) break; 
-        }
-        return minV;
-    }
 }
 
 function getCandidates(b) {
@@ -206,10 +181,10 @@ async function botMove() {
     document.getElementById('stat-paths').innerText = cans.length + "개 검토";
     
     let scoredCans = [];
-    // 1단계: 순수 Minimax 휴리스틱으로 모든 후보 평가
+    // 1단계: 순수 상태 평가로 모든 후보 평가 (딥 서치 제거 - 트랩에 취약해짐)
     for(let idx of cans) {
         board[idx] = 2; 
-        let rawScore = alphaBeta(board, 1, -Infinity, Infinity, false); 
+        let rawScore = evaluateBoard(board, 2); 
         board[idx] = 0;
         scoredCans.push({idx, rawScore});
     }
@@ -227,11 +202,11 @@ async function botMove() {
 
     for(let i=0; i<topCans.length; i++) {
         let rawScore = topCans[i].rawScore;
-        let mod = mods[i]; // -1.0 ~ 1.0
+        let mod = mods[i]; 
         avgModAbs += Math.abs(mod);
         
-        // 신경망 개입: 휴리스틱 점수에 대폭 보정치 합산 (패턴 점수 교란 허용)
-        let blendedScore = rawScore + (mod * PATTERNS.OPEN_4 * 0.4); 
+        // 신경망 개입: 휴리스틱 점수에 유의미한 보정치 합산 (8000점: 강압적인 4목은 무시하지 않으나, 3목 싸움은 완벽히 뒤집을 수 있는 스케일)
+        let blendedScore = rawScore + (mod * 8000); 
         
         // 확정적인 승/패 방어는 건드리지 않음
         if (Math.abs(rawScore) > PATTERNS.WIN * 0.5) blendedScore = rawScore;
