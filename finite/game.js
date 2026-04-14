@@ -35,7 +35,7 @@ const PATTERNS = { WIN: 10000000, OPEN_4: 1000000, BLOCKED_4: 100000, OPEN_3: 10
 // ==========================================
 async function initModel() {
     try {
-        model = await tf.loadLayersModel('localstorage://gomoku-adaptive-weights');
+        model = await tf.loadLayersModel('localstorage://gomoku-finite-weights');
         // 신규 CNN 구조 여부를 확인하여, 예전 모델이면 에러를 던져 초기화 유도
         if (model.inputs[0].shape[1] !== 225) throw new Error("Old model architecture");
     } catch (e) {
@@ -307,11 +307,10 @@ async function botMove() {
     pushLog(`봉인해둔 '수읽기 절대 규범(Minimax)'을 해제합니다. 상대의 다음 수를 예측해볼게요... 👁️`, 'bot-think');
     await sleep(800);
 
-    // 2단계: 함정 조기 간파를 막기 위해 수읽기를 1-ply로 얕게 제한 (상대의 즉각 패배/승리만 걸러냄)
+    // 2단계: 2-ply 수읽기 (유저의 1수 꿰뚫기)
     for(let i=0; i<topCans.length; i++) {
         board[topCans[i].idx] = 2; 
-        // 봇이 직전 수(1-ply)를 둔 상태에서 극단적인 대응만 고려하는 얕은 탐색
-        topCans[i].rawScore = godModeEvaluate(board, 1, -Infinity, Infinity, false); 
+        topCans[i].rawScore = godModeEvaluate(board, 2, -Infinity, Infinity, false); 
         board[topCans[i].idx] = 0;
     }
     
@@ -526,7 +525,7 @@ async function endGame(res) {
         } catch(e) {} finally { xs.dispose(); ys.dispose(); }
     }
     
-    await model.save('localstorage://gomoku-adaptive-weights'); 
+    await model.save('localstorage://gomoku-finite-weights'); 
     document.getElementById('modal-body').innerText = "학습 완료! 게임판을 초기화합니다.";
     updateUI();
 }

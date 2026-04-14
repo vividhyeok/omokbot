@@ -35,7 +35,7 @@ const PATTERNS = { WIN: 10000000, OPEN_4: 1000000, BLOCKED_4: 100000, OPEN_3: 10
 // ==========================================
 async function initModel() {
     try {
-        model = await tf.loadLayersModel('localstorage://gomoku-adaptive-weights');
+        model = await tf.loadLayersModel('localstorage://gomoku-infinite-weights');
         // 신규 CNN 구조 여부를 확인하여, 예전 모델이면 에러를 던져 초기화 유도
         if (model.inputs[0].shape[1] !== 225) throw new Error("Old model architecture");
     } catch (e) {
@@ -157,8 +157,10 @@ function evaluateBoard(b, targetPlayer) {
     return score;
 }
 
-// 기존 UI 전용이었으나, 이제 봇의 핵심 엔진으로 승격된 깊은 수읽기 (Minimax) 절대 규범
+let expireTime = 0;
+// 핵심 엔진으로 승격된 깊은 수읽기 (Minimax) 절대 규범
 function godModeEvaluate(b, depth, alpha, beta, maximizingPlayer) {
+    if(Date.now() > expireTime) return evaluateBoard(b, maximizingPlayer ? 2 : 1); // Timeout safety
     let s = evaluateBoard(b, 2);
     if(depth === 0 || Math.abs(s) > PATTERNS.WIN*0.5) return s;
     let candidates = getCandidates(b);
@@ -307,12 +309,22 @@ async function botMove() {
     pushLog(`봉인해둔 '수읽기 절대 규범(Minimax)'을 해제합니다. 상대의 다음 수를 예측해볼게요... 👁️`, 'bot-think');
     await sleep(800);
 
-    // 2단계: 함정 조기 간파를 막기 위해 수읽기를 1-ply로 얕게 제한 (상대의 즉각 패배/승리만 걸러냄)
-    for(let i=0; i<topCans.length; i++) {
-        board[topCans[i].idx] = 2; 
-        // 봇이 직전 수(1-ply)를 둔 상태에서 극단적인 대응만 고려하는 얕은 탐색
-        topCans[i].rawScore = godModeEvaluate(board, 1, -Infinity, Infinity, false); 
-        board[topCans[i].idx] = 0;
+    // 2단계: 무한 수읽기 (Iterative Deepening Search - 2.5초간 한계 깊이 파고들기)
+    expireTime = Date.now() + 2500;
+    let currentDepth = 1;
+    
+    while(Date.now() < expireTime && currentDepth <= 10) {
+        for(let i=0; i<topCans.length; i++) {
+            if (Date.now() > expireTime) break;
+            board[topCans[i].idx] = 2; 
+            let s = godModeEvaluate(board, currentDepth, -Infinity, Infinity, false); 
+            board[topCans[i].idx] = 0;
+            
+            if (Date.now() <= expireTime) topCans[i].rawScore = s;
+        }
+        topCans.sort((a,b) => b.rawScore - a.rawScore); // 다음 뎁스의 가지치기 최적화
+        if (Math.abs(topCans[0].rawScore) > PATTERNS.WIN * 0.5) break; // 조기 승패 발견시 딥다이빙 멈춤
+        currentDepth++;
     }
     
     // 수읽기 결과로 다시 정렬 (수읽기로 발견한 치명적 함정 픽은 점수가 나락으로 감)
@@ -526,7 +538,7 @@ async function endGame(res) {
         } catch(e) {} finally { xs.dispose(); ys.dispose(); }
     }
     
-    await model.save('localstorage://gomoku-adaptive-weights'); 
+    await model.save('localstorage://gomoku-infinite-weights'); 
     document.getElementById('modal-body').innerText = "학습 완료! 게임판을 초기화합니다.";
     updateUI();
 }
