@@ -15,14 +15,11 @@ let hoverPos = null;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function pushLog(msg, type='log-sys') {
+function pushLog(msg, type='bot-sys') {
     const c = document.getElementById('ai-console');
     const d = document.createElement('div');
-    d.className = `log-line ${type}`;
-    // 시간 추가
-    const now = new Date();
-    const t = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
-    d.innerHTML = `[${t}] ${msg}`;
+    d.className = `chat-bubble ${type}`;
+    d.innerHTML = msg;
     c.appendChild(d);
     c.scrollTop = c.scrollHeight;
 }
@@ -216,8 +213,8 @@ async function userMove(x, y) {
 }
 
 async function botMove() {
-    pushLog(`유저 착수 완료. 후보 탐색 중...`, 'log-sys');
-    await sleep(400);
+    pushLog(`음... 어디에 두면 좋을지 생각 중이에요! 🤔`, 'bot-sys');
+    await sleep(800);
 
     let cans = getCandidates(board);
     let scoredCans = [];
@@ -233,10 +230,10 @@ async function botMove() {
     scoredCans.sort((a,b) => b.rawScore - a.rawScore);
     let topCans = scoredCans.slice(0, 15);
     
-    pushLog(`기본 규칙(본능)에 의한 최상위 후보: (${topCans[0].idx%SIZE}, ${Math.floor(topCans[0].idx/SIZE)})`, 'log-sys');
-    await sleep(400);
-    pushLog(`과거 데이터를 바탕으로 강화학습 신경망 개입 중...`, 'log-warn');
-    await sleep(600);
+    // pushLog(`보통이라면 (${topCans[0].idx%SIZE}, ${Math.floor(topCans[0].idx/SIZE)})에 두는 게 제일 좋겠네요!`, 'bot-think');
+    // await sleep(800);
+    pushLog(`잠깐만요, 예전에 당신한테 당했던 함정이 있는지 제 기억(신경망)을 떠올려볼게요... 🧠`, 'bot-think');
+    await sleep(1200);
 
     // 2단계: 상위 후보들에 대해 신경망(Layer 2) 일괄 예측
     let topIndices = topCans.map(c => c.idx);
@@ -264,14 +261,14 @@ async function botMove() {
     }
     
     if (best !== originalBest) {
-        pushLog(`강화학습 회피 기동! 과거 경험에 의해 기본 규칙안을 폐기합니다. 가중치 보정됨.`, 'log-nn');
-        await sleep(300);
-        pushLog(`[채택] 대체 좌표 (${best%SIZE}, ${Math.floor(best/SIZE)}) 로 선회.`, 'log-act');
+        pushLog(`앗! 방금 그곳은 예전에 당했던 함정 같아요! 😱 본능을 거스르고 피해야겠어요!`, 'bot-nn');
+        await sleep(800);
+        pushLog(`대신 상대적으로 안전해 보이는 (${best%SIZE}, ${Math.floor(best/SIZE)})에 둘게요! ✨`, 'bot-act');
     } else {
-        pushLog(`현재 패턴에 특이점 없음. 기본 규칙안(${best%SIZE}, ${Math.floor(best/SIZE)})을 확정합니다.`, 'log-act');
+        pushLog(`별다른 위험은 보이지 않네요. 예정대로 (${best%SIZE}, ${Math.floor(best/SIZE)})에 착수! 😊`, 'bot-act');
     }
 
-    await sleep(300);
+    await sleep(600);
 
     if(best !== -1) {
         makeMove(best % SIZE, Math.floor(best / SIZE), 2);
@@ -324,8 +321,12 @@ async function endGame(res) {
     document.getElementById('modal-title').innerText = res === 'won' ? "당신의 승리!" : (res === 'lost' ? "봇의 승리!" : "무승부!");
     document.getElementById('modal-body').innerText = "기록을 분석하여 신경망을 미세 조정하고 있습니다...";
     
-    pushLog(`[게임 종료] 결과: ${res === 'won' ? '봇 패배(-1)' : (res === 'lost' ? '봇 승리(+1)' : '무승부')}`, 'log-warn');
-    pushLog(`기보 데이터를 바탕으로 강화학습 신경망을 업데이트합니다...`, 'log-nn');
+    if(res === 'won') {
+        pushLog(`아앗... 제가 짓다니요 😭 확실히 복기해서 다음번엔 똑같은 함정에 안 당할 거예요! 📝`, 'bot-warn');
+    } else if(res === 'lost') {
+        pushLog(`제가 이겼네요! 제 데이터가 제대로 작동하나 봐요 🚀 패턴을 강화합니다!`, 'bot-act');
+    }
+    pushLog(`기보 데이터를 바탕으로 인공지능 뇌구조를 재공사합니다... 🛠️`, 'bot-nn');
 
     const reward = res === 'lost' ? 1 : (res === 'won' ? -1 : 0);
     let xsData = [], ysData = [];
@@ -345,7 +346,7 @@ async function endGame(res) {
             let fLoss = h.history.loss[0];
             lossHistory.push(fLoss); 
             localStorage.setItem('gomoku-loss-history', JSON.stringify(lossHistory.slice(-50)));
-            pushLog(`학습 완료. 최종 Loss: ${fLoss.toFixed(4)}`, 'log-act');
+            pushLog(`학습 완료! (오차율: ${fLoss.toFixed(4)}) 다음 판에서는 더 똑똑해질 거예요 😎`, 'bot-sys');
         } catch(e) {} finally { xs.dispose(); ys.dispose(); }
     }
     
