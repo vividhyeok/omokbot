@@ -230,9 +230,11 @@ async function botMove() {
     scoredCans.sort((a,b) => b.rawScore - a.rawScore);
     let topCans = scoredCans.slice(0, 15);
     
-    // pushLog(`보통이라면 (${topCans[0].idx%SIZE}, ${Math.floor(topCans[0].idx/SIZE)})에 두는 게 제일 좋겠네요!`, 'bot-think');
-    // await sleep(800);
-    pushLog(`잠깐만요, 예전에 당신한테 당했던 함정이 있는지 제 기억(신경망)을 떠올려볼게요... 🧠`, 'bot-think');
+    if (stats.total > 0) {
+        pushLog(`잠깐만요, 예전에 당신한테 당했던 함정이 있는지 제 기억(신경망)을 떠올려볼게요... 🧠`, 'bot-think');
+    } else {
+        pushLog(`아직 배운 건 없지만, 제 동물적인 직감(초기 신경망)에 의존해 볼게요... 🧠`, 'bot-think');
+    }
     await sleep(1200);
 
     // 2단계: 상위 후보들에 대해 신경망(Layer 2) 일괄 예측
@@ -261,7 +263,11 @@ async function botMove() {
     }
     
     if (best !== originalBest) {
-        pushLog(`앗! 방금 그곳은 예전에 당했던 함정 같아요! 😱 본능을 거스르고 피해야겠어요!`, 'bot-nn');
+        if (stats.total > 0) {
+            pushLog(`앗! 방금 그곳은 예전에 당했던 함정 패턴과 비슷해요! 😱 본능을 거스르고 피해야겠어요.`, 'bot-nn');
+        } else {
+            pushLog(`왠지 모르게 직감적으로 위험해 보이네요! 🧐 본능을 거스르고 다른 곳을 찾아볼게요.`, 'bot-nn');
+        }
         await sleep(800);
         pushLog(`대신 상대적으로 안전해 보이는 (${best%SIZE}, ${Math.floor(best/SIZE)})에 둘게요! ✨`, 'bot-act');
     } else {
