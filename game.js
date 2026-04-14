@@ -80,7 +80,7 @@ function evaluateBoard(b, targetPlayer) {
     let s = 0;
     for(let i=0; i<SIZE*SIZE; i++) {
         if(b[i] === targetPlayer) s += getBaseScore(b, i % SIZE, Math.floor(i / SIZE), targetPlayer);
-        else if(b[i] !== 0) s -= getBaseScore(b, i % SIZE, Math.floor(i / SIZE), b[i]) * 1.1; 
+        else if(b[i] !== 0) s -= getBaseScore(b, i % SIZE, Math.floor(i / SIZE), b[i]) * 0.95; 
     }
     return s;
 }
@@ -129,10 +129,22 @@ function getCandidates(b) {
     return arr.length ? arr : [112]; 
 }
 
-async function getAdaptiveModifier(b) {
-    const feat = Array.from(b).map(v => v === 1 ? 1 : (v === 2 ? -1 : 0));
+async function getAdaptiveModifiersForCandidates(b, candidateIndices) {
     const meta = [gameHistory.length/225, stats.won/(stats.total||1), stats.total/50, 0.5];
-    return tf.tidy(() => model.predict(tf.tensor2d([feat.concat(meta)])).dataSync()[0]);
+    let batchFeatures = [];
+    
+    for(let idx of candidateIndices) {
+        b[idx] = 2; // 현재 후보에 돌을 놓아본 가상 보드
+        const feat = Array.from(b).map(v => v === 1 ? 1 : (v === 2 ? -1 : 0));
+        batchFeatures.push(feat.concat(meta));
+        b[idx] = 0; // 원복
+    }
+
+    return tf.tidy(() => {
+        const tensor = tf.tensor2d(batchFeatures);
+        const preds = model.predict(tensor);
+        return preds.dataSync(); // 각 후보별 스칼라 배열 반환
+    });
 }
 
 // ==========================================
@@ -158,33 +170,56 @@ async function userMove(x, y) {
     if(checkWin(x, y, 1)) return endGame('won'); 
     if(board.every(v => v !== 0)) return endGame('draw'); 
     isThinking = true; updateProb(); updateUI();
-    setTimeout(botMove, 400); // 렌더링 양보용
+    setTimeout(botMove, 200); 
 }
 
 async function botMove() {
     let cans = getCandidates(board);
     document.getElementById('stat-paths').innerText = cans.length + "개 검토";
     
-    const mod = await getAdaptiveModifier(board);
-    document.getElementById('stat-adaptive').innerText = Math.round(Math.abs(mod) * 40) + '%';
-    document.getElementById('bar-adaptive').style.width = Math.round(Math.abs(mod) * 100) + '%';
-    
-    let best = -1, maxS = -Infinity, secondS = -Infinity;
-    
+    let scoredCans = [];
+    // 1단계: 순수 Minimax 휴리스틱으로 모든 후보 평가
     for(let idx of cans) {
         board[idx] = 2; 
         let rawScore = alphaBeta(board, 1, -Infinity, Infinity, false); 
         board[idx] = 0;
-        let blendedScore = rawScore * (1 + 0.4 * mod);
+        scoredCans.push({idx, rawScore});
+    }
+    
+    // 상위 15개 후보 추리기 (너무 큰 차이는 어차피 안둠)
+    scoredCans.sort((a,b) => b.rawScore - a.rawScore);
+    let topCans = scoredCans.slice(0, 15);
+    
+    // 2단계: 상위 후보들에 대해 신경망(Layer 2) 일괄 예측
+    let topIndices = topCans.map(c => c.idx);
+    let mods = await getAdaptiveModifiersForCandidates(board, topIndices);
+    
+    let best = -1, maxS = -Infinity, secondS = -Infinity;
+    let avgModAbs = 0;
+
+    for(let i=0; i<topCans.length; i++) {
+        let rawScore = topCans[i].rawScore;
+        let mod = mods[i]; // -1.0 ~ 1.0
+        avgModAbs += Math.abs(mod);
+        
+        // 신경망 개입: 휴리스틱 점수에 대폭 보정치 합산 (패턴 점수 교란 허용)
+        let blendedScore = rawScore + (mod * PATTERNS.OPEN_4 * 0.4); 
+        
+        // 확정적인 승/패 방어는 건드리지 않음
+        if (Math.abs(rawScore) > PATTERNS.WIN * 0.5) blendedScore = rawScore;
         
         if(blendedScore > maxS) { 
             secondS = maxS;
             maxS = blendedScore; 
-            best = idx; 
+            best = topCans[i].idx; 
         } else if (blendedScore > secondS) {
             secondS = blendedScore;
         }
     }
+    
+    avgModAbs /= topCans.length;
+    document.getElementById('stat-adaptive').innerText = Math.round(avgModAbs * 100) + '%';
+    document.getElementById('bar-adaptive').style.width = Math.round(avgModAbs * 100) + '%';
     
     if (secondS === -Infinity || secondS === 0) secondS = 1;
     let confidenceRatio = maxS / secondS;
