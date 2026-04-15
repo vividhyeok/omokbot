@@ -3,34 +3,130 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>오목봇 버전 선택</title>
+    <title>오목봇 | 강화학습 오목봇</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'Inter', sans-serif; background: #f8f6f2; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; text-align: center; flex-direction: column; }
-        .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); max-width: 400px; width: 90%; }
-        h1 { margin-top: 0; color: #1a1a1a; }
-        p { color: #666; margin-bottom: 2rem; }
-        a { display: block; padding: 15px; margin-bottom: 15px; border-radius: 8px; text-decoration: none; font-weight: bold; transition: 0.2s; }
-        .btn-finite { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
-        .btn-finite:hover { background: #fecaca; }
-        .btn-infinite { background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
-        .btn-infinite:hover { background: #bfdbfe; }
-    </style>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="card">
-        <h1>오목봇 🤖</h1>
-        <p>A/B 테스트를 위해 임의 분리된 두 버전을 비교해보세요.</p>
-        
-        <a href="finite/" class="btn-finite">
-            <strong>/finite 버전</strong><br>
-            <span style="font-size:0.8rem; font-weight:normal;">[이전 버전] Minimax 2수 앞 수읽기 (완벽 방어) + Dense Model</span>
-        </a>
-        
-        <a href="infinite/" class="btn-infinite">
-            <strong>/infinite 버전</strong><br>
-            <span style="font-size:0.8rem; font-weight:normal;">[현재 버전] Minimax 1수 앞 수읽기 (초기 허점) + CNN Model & 8-way Augment (강력한 체감 학습)</span>
-        </a>
+
+<div id="startup-overlay">
+    <div class="modal-card">
+        <h2 style="margin-bottom: 5px; font-size: 2rem;">오목봇🤖</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 2rem;">강화학습 기반 오목 플레이 프로젝트</p>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+            <button class="btn-secondary" id="btn-start-load" style="margin-top:0;">이어 하기</button>
+            <button class="btn-primary" id="btn-start-new">게임 시작</button>
+            <a href="https://github.com/vividhyeok/omokbot.git" target="_blank" class="btn-outline" style="text-decoration:none;">깃허브 레포 확인하기</a>
+        </div>
     </div>
+</div>
+
+<header>
+    <div style="display:flex; align-items:center; gap:15px;">
+        <h1 style="font-size: 1.25rem;">오목봇🤖</h1>
+        <div id="game-counter" style="font-size: 0.9rem; opacity: 0.8;">1번째 판</div>
+    </div>
+    <div id="bot-level" class="level-badge level-low">Lv 1: 초보</div>
+</header>
+
+<main>
+    <div id="game-container">
+        <canvas id="board-canvas"></canvas>
+        <div id="heatmap-legend" style="display:none; position:absolute; top:30px; left:30px; background:rgba(255,255,255,0.9); padding:10px; border-radius:8px; border:1px solid #ddd; font-size:0.75rem; box-shadow:0 2px 10px rgba(0,0,0,0.1); z-index:10; pointer-events:none;">
+            <strong id="legend-title" style="display:block; margin-bottom:5px;">AI 뇌파 분석 맵</strong>
+            <span id="legend-pos-color" style="color:#10b981; font-weight:bold;">● 초록색(+)</span><span id="legend-pos-text">: AI가 유리하다고 판단하여 두고 싶어하는 자리</span><br>
+            <div style="margin-top:4px;">
+                <span id="legend-neg-color" style="color:#a855f7; font-weight:bold;">● 보라색(-)</span><span id="legend-neg-text">: 과거 당했던 패턴이라 무서워하며 회피하는 자리</span>
+            </div>
+        </div>
+    </div>
+
+    <aside id="side-panel">
+        <div class="win-prob-container">
+            <div class="win-prob-bar">
+                <div id="prob-user" class="prob-user" style="width: 50%;">당신 50%</div>
+                <div id="prob-bot" class="prob-bot" style="width: 50%;">봇 50%</div>
+            </div>
+        </div>
+
+        <div class="panel-section" id="section-decision">
+            <div class="section-title">결정 근거 (실시간)</div>
+            <div class="section-body">
+                <div class="stat-row"><span>수읽기 기여</span><span id="mix-heuristic" class="stat-val">0%</span></div>
+                <div class="stat-row"><span>학습망 기여</span><span id="mix-adaptive" class="stat-val">0%</span></div>
+                <div class="stat-row"><span>유저예측 기여</span><span id="mix-prediction" class="stat-val">0%</span></div>
+                <div class="stat-row"><span>현재 선택수 확률</span><span id="mix-choice-prob" class="stat-val">-</span></div>
+                <div style="font-size:0.78rem; margin-top:8px; color:#4b5563;" id="analysis-signal">아직 수집된 분석 데이터가 없습니다.</div>
+            </div>
+        </div>
+
+        <div class="panel-section collapsed" id="section-momentum">
+            <div class="section-title">실시간 전황 (수읽기 기반)</div>
+            <div class="section-body">
+                <div class="chart-container" id="momentum-chart"></div>
+                <div style="font-size: 0.7rem; color: #888; text-align: center; margin-top: 5px;">현재 판의 객관성(UI) 흐름</div>
+            </div>
+        </div>
+
+        <div class="panel-section" id="section-console">
+            <div class="section-title">오목봇의 속마음 💬</div>
+            <div class="section-body">
+                <div id="ai-console">
+                    <div class="chat-bubble bot-sys">대국 준비 완료! 당신의 습관을 학습하며 방어할 준비가 되었습니다.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel-section collapsed" id="section-prediction-rank">
+            <div class="section-title">다음 수 예측 Top3</div>
+            <div class="section-body" id="user-top3" style="font-size:0.8rem; color:#374151;">
+                예측 데이터 준비 중...
+            </div>
+        </div>
+
+        <div class="panel-section collapsed" id="section-bot-rank">
+            <div class="section-title">봇 후보수 확률 Top3</div>
+            <div class="section-body" id="bot-top3" style="font-size:0.8rem; color:#374151;">
+                후보 평가 준비 중...
+            </div>
+        </div>
+
+        <div class="panel-section collapsed" id="section-loss">
+            <div class="section-title">신경망 오차 (Loss) 변화</div>
+            <div class="section-body">
+                <div class="stat-row">
+                    <span>최종 손실률 (낮을수록 좋음)</span>
+                    <span id="stat-loss" class="stat-val">N/A</span>
+                </div>
+                <div class="chart-container" id="loss-chart"></div>
+                <div style="font-size: 0.7rem; color: #888; text-align: center; margin-top: 5px;">과거 대국을 통한 오차 수정 이력</div>
+            </div>
+        </div>
+    </aside>
+</main>
+
+<footer>
+    <div id="history-text">전적: 0승 0무 0패</div>
+    <div class="footer-btns">
+        <span class="footer-link" id="btn-toggle-heatmap">시각화: 끄기</span>
+        <span class="footer-link" id="btn-export">기억 파일로 내보내기 📥</span>
+        <span class="footer-link" id="btn-reset" style="color: #ef4444;">초기화</span>
+        <input type="file" id="import-file" accept=".json">
+    </div>
+</footer>
+
+<div id="modal-overlay">
+    <div class="modal-card">
+        <h2 id="modal-title">결과</h2>
+        <p id="modal-body" style="margin: 1rem 0; color: var(--text-secondary);"></p>
+        <div style="display: flex; gap: 10px; justify-content: center; margin-top: 15px;">
+            <button class="btn-primary" id="btn-play-again">다시 하기</button>
+            <button class="btn-secondary" id="btn-view-board">보드 감상하기</button>
+        </div>
+    </div>
+</div>
+
+<script src="game.js" defer></script>
 </body>
 </html>

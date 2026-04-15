@@ -13,6 +13,47 @@ let winProbHistory = JSON.parse(localStorage.getItem('gomoku-winprob-history')) 
 let viewMode = 0, isThinking = false, model = null, modelReady = false;
 const VIEW_MODES = ['시각화: 끄기', 'AI 뇌구조 맵 보기', '유저 공격 예측 보기'];
 let hoverPos = null; 
+let lastUserMoveIdx = null;
+let lastDecisionTelemetry = {
+    heuristicPct: 0,
+    adaptivePct: 0,
+    predictionPct: 0,
+    selectedProb: 0,
+    botTop3: [],
+    userTop3: []
+};
+
+const PLAYER_MODEL_KEY = 'gomoku-player-model';
+const createDefaultPlayerModel = () => ({
+    moveCount: Array(SIZE * SIZE).fill(0),
+    transition: {},
+    threatCells: {},
+    gamesAnalyzed: 0
+});
+
+let playerModel = (() => {
+    const raw = JSON.parse(localStorage.getItem(PLAYER_MODEL_KEY) || 'null');
+    if (!raw || !Array.isArray(raw.moveCount) || raw.moveCount.length !== SIZE * SIZE) {
+        return createDefaultPlayerModel();
+    }
+    return {
+        moveCount: raw.moveCount,
+        transition: raw.transition || {},
+        threatCells: raw.threatCells || {},
+        gamesAnalyzed: Number(raw.gamesAnalyzed) || 0
+    };
+})();
+
+for (let i = gameHistory.length - 1; i >= 0; i--) {
+    if (gameHistory[i].player === 1) {
+        lastUserMoveIdx = gameHistory[i].idx;
+        break;
+    }
+}
+
+function savePlayerModel() {
+    localStorage.setItem(PLAYER_MODEL_KEY, JSON.stringify(playerModel));
+}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -29,6 +70,41 @@ const canvas = document.getElementById('board-canvas'), ctx = canvas.getContext(
 canvas.width = canvas.height = CANVAS_SIZE;
 
 const PATTERNS = { WIN: 10000000, OPEN_4: 1000000, BLOCKED_4: 100000, OPEN_3: 10000, BLOCKED_3: 5000, OPEN_2: 100 };
+
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+function getDifficultyProfile(totalGames) {
+    if (totalGames < 2) {
+        return { depth: 1, adaptiveWeight: 8000, predictionWeight: 18000, noise: 0.28, topN: 12 };
+    }
+    if (totalGames < 6) {
+        return { depth: 2, adaptiveWeight: 14000, predictionWeight: 32000, noise: 0.14, topN: 15 };
+    }
+    return { depth: 2, adaptiveWeight: 22000, predictionWeight: 46000, noise: 0.04, topN: 18 };
+}
+
+function sampleBySoftmax(rankedMoves, temperature) {
+    if (!rankedMoves.length) return -1;
+    const t = Math.max(0.01, temperature);
+    const maxScore = rankedMoves[0].score;
+    let probs = rankedMoves.map(m => Math.exp((m.score - maxScore) / (Math.abs(maxScore) * 0.05 + t * 10000)));
+    const sum = probs.reduce((a, b) => a + b, 0);
+    let r = Math.random() * sum;
+    for (let i = 0; i < rankedMoves.length; i++) {
+        r -= probs[i];
+        if (r <= 0) return rankedMoves[i].idx;
+    }
+    return rankedMoves[0].idx;
+}
+
+function getSoftmaxRanked(rankedMoves, temperature) {
+    if (!rankedMoves.length) return [];
+    const t = Math.max(0.01, temperature);
+    const maxScore = rankedMoves[0].score;
+    const exps = rankedMoves.map(m => Math.exp((m.score - maxScore) / (Math.abs(maxScore) * 0.05 + t * 10000)));
+    const sum = exps.reduce((a, b) => a + b, 0) || 1;
+    return rankedMoves.map((m, i) => ({ ...m, prob: exps[i] / sum }));
+}
 
 // ==========================================
 // 모델 초기화
@@ -202,6 +278,122 @@ function getCandidates(b) {
     return arr.length ? arr : [112]; 
 }
 
+function checkWinOnBoard(b, x, y, p) {
+    const dirs = [[1,0], [0,1], [1,1], [1,-1]];
+    for (let [dx, dy] of dirs) {
+        let count = 1;
+        let nx = x + dx, ny = y + dy;
+        while (nx >= 0 && nx < SIZE && ny >= 0 && ny < SIZE && b[ny * SIZE + nx] === p) {
+            count++;
+            nx += dx;
+            ny += dy;
+        }
+        nx = x - dx;
+        ny = y - dy;
+        while (nx >= 0 && nx < SIZE && ny >= 0 && ny < SIZE && b[ny * SIZE + nx] === p) {
+            count++;
+            nx -= dx;
+            ny -= dy;
+        }
+        if (count >= 5) return true;
+    }
+    return false;
+}
+
+function getImmediateWinningMoves(b, p, maxReturn = Infinity) {
+    let wins = [];
+    for (let i = 0; i < SIZE * SIZE; i++) {
+        if (b[i] !== 0) continue;
+        b[i] = p;
+        const x = i % SIZE;
+        const y = Math.floor(i / SIZE);
+        if (checkWinOnBoard(b, x, y, p)) {
+            wins.push(i);
+            if (wins.length >= maxReturn) {
+                b[i] = 0;
+                break;
+            }
+        }
+        b[i] = 0;
+    }
+    return wins;
+}
+
+function countNearbyStones(b, idx, p) {
+    const x = idx % SIZE;
+    const y = Math.floor(idx / SIZE);
+    let c = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || nx >= SIZE || ny < 0 || ny >= SIZE) continue;
+            if (b[ny * SIZE + nx] === p) c++;
+        }
+    }
+    return c;
+}
+
+function getUserPredictionMap(b) {
+    const map = {};
+    const empty = [];
+    for (let i = 0; i < SIZE * SIZE; i++) if (b[i] === 0) empty.push(i);
+    if (!empty.length) return map;
+
+    const immediateWins = getImmediateWinningMoves(b, 1, 10);
+    immediateWins.forEach(idx => { map[idx] = (map[idx] || 0) + 1.2; });
+
+    let maxMoveCount = Math.max(1, ...playerModel.moveCount);
+    let maxThreat = 1;
+    Object.values(playerModel.threatCells).forEach(v => { maxThreat = Math.max(maxThreat, Number(v) || 0); });
+
+    let maxTransition = 1;
+    let transition = {};
+    if (lastUserMoveIdx !== null && playerModel.transition[lastUserMoveIdx]) {
+        transition = playerModel.transition[lastUserMoveIdx];
+        Object.values(transition).forEach(v => { maxTransition = Math.max(maxTransition, Number(v) || 0); });
+    }
+
+    const lastX = lastUserMoveIdx === null ? 7 : lastUserMoveIdx % SIZE;
+    const lastY = lastUserMoveIdx === null ? 7 : Math.floor(lastUserMoveIdx / SIZE);
+
+    empty.forEach(idx => {
+        const x = idx % SIZE;
+        const y = Math.floor(idx / SIZE);
+        const dist = Math.abs(x - lastX) + Math.abs(y - lastY);
+        const localAggro = countNearbyStones(b, idx, 1) / 8;
+        const moveFreq = (playerModel.moveCount[idx] || 0) / maxMoveCount;
+        const threatFreq = (Number(playerModel.threatCells[idx]) || 0) / maxThreat;
+        const transFreq = (Number(transition[idx]) || 0) / maxTransition;
+        const recency = 1 / (1 + dist);
+
+        const score = moveFreq * 0.25 + threatFreq * 0.35 + transFreq * 0.2 + localAggro * 0.15 + recency * 0.05;
+        map[idx] = (map[idx] || 0) + score;
+    });
+
+    return map;
+}
+
+function updatePlayerModelAfterUserMove(x, y) {
+    const idx = y * SIZE + x;
+    playerModel.moveCount[idx] = (playerModel.moveCount[idx] || 0) + 1;
+
+    if (lastUserMoveIdx !== null) {
+        if (!playerModel.transition[lastUserMoveIdx]) playerModel.transition[lastUserMoveIdx] = {};
+        const t = playerModel.transition[lastUserMoveIdx];
+        t[idx] = (t[idx] || 0) + 1;
+    }
+    lastUserMoveIdx = idx;
+
+    const userWinsSoon = getImmediateWinningMoves(board, 1, 6);
+    userWinsSoon.forEach(wIdx => {
+        playerModel.threatCells[wIdx] = (playerModel.threatCells[wIdx] || 0) + 1;
+    });
+
+    savePlayerModel();
+}
+
 async function getAdaptiveModifiersForCandidates(b, candidateIndices, player = 2) {
     let batchFeatures = [];
     
@@ -269,6 +461,7 @@ canvas.addEventListener('mouseout', () => {
 async function userMove(x, y) {
     hoverPos = null;
     makeMove(x, y, 1);
+    updatePlayerModelAfterUserMove(x, y);
     let winState = checkWin(x, y, 1);
     if(winState) {
         drawWinLine(winState);
@@ -289,8 +482,12 @@ async function botMove() {
     pushLog(thinkingMsgs[Math.floor(Math.random()*thinkingMsgs.length)], 'bot-sys');
     await sleep(800);
 
+    const profile = getDifficultyProfile(stats.total);
     let cans = getCandidates(board);
     let scoredCans = [];
+    const userPredictionMap = getUserPredictionMap(board);
+    const forcedBlocks = new Set(getImmediateWinningMoves(board, 1, 10));
+
     // 1단계: 끊어진 윈도우까지 탐지하는 향상된 상태 평가
     for(let idx of cans) {
         board[idx] = 2; 
@@ -299,19 +496,17 @@ async function botMove() {
         scoredCans.push({idx, rawScore});
     }
     
-    // 상위 15개 후보 추리기
+    // 상위 후보 추리기
     scoredCans.sort((a,b) => b.rawScore - a.rawScore);
-    let topCans = scoredCans.slice(0, 15);
+    let topCans = scoredCans.slice(0, profile.topN);
     
-    // -- 사용자가 아쉬워했던 '수읽기 절대 규범' 해금! --
-    pushLog(`봉인해둔 '수읽기 절대 규범(Minimax)'을 해제합니다. 상대의 다음 수를 예측해볼게요... 👁️`, 'bot-think');
+    pushLog(`수읽기 + 사용자 다음 수 예측을 동시에 돌려서 함정과 반복 패턴을 함께 점검합니다. 👁️`, 'bot-think');
     await sleep(800);
 
-    // 2단계: 함정 조기 간파를 막기 위해 수읽기를 1-ply로 얕게 제한 (상대의 즉각 패배/승리만 걸러냄)
+    // 2단계: 진행도에 따라 깊이를 올리는 Minimax
     for(let i=0; i<topCans.length; i++) {
         board[topCans[i].idx] = 2; 
-        // 봇이 직전 수(1-ply)를 둔 상태에서 극단적인 대응만 고려하는 얕은 탐색
-        topCans[i].rawScore = godModeEvaluate(board, 1, -Infinity, Infinity, false); 
+        topCans[i].rawScore = godModeEvaluate(board, profile.depth, -Infinity, Infinity, false); 
         board[topCans[i].idx] = 0;
     }
     
@@ -325,36 +520,88 @@ async function botMove() {
     }
     await sleep(800);
 
-    // 3단계: 상위 후보들에 대해 신경망(Layer 2) 일괄 예측
+    // 3단계: 상위 후보들에 대해 신경망(Layer 2) + 사용자 예측 가중치 결합
     let topIndices = topCans.map(c => c.idx);
     let mods = await getAdaptiveModifiersForCandidates(board, topIndices);
     
-    let best = -1, maxS = -Infinity;
+    let ranked = [];
     let originalBest = topCans[0].idx;
-    let chosenMod = 0;
 
     for(let i=0; i<topCans.length; i++) {
         let rawScore = topCans[i].rawScore;
         let mod = mods[i]; 
+        let idx = topCans[i].idx;
+        let predictionScore = userPredictionMap[idx] || 0;
         
-        // 신경망 개입: 휴리스틱 점수에 유의미한 보정치 합산 (스케일 상향 반영)
-        let blendedScore = rawScore + (mod * 20000); 
+        const adaptiveContribution = mod * profile.adaptiveWeight;
+        const predictionContribution = predictionScore * profile.predictionWeight;
+        let blendedScore = rawScore + adaptiveContribution + predictionContribution;
+
+        board[idx] = 2;
+        const userImmediateAfter = getImmediateWinningMoves(board, 1, 3).length;
+        board[idx] = 0;
+
+        if (forcedBlocks.size > 0 && !forcedBlocks.has(idx)) {
+            blendedScore -= 800000;
+        }
+        blendedScore -= userImmediateAfter * 350000;
         
         // 확정적인 승/패 방어는 건드리지 않음
         if (Math.abs(rawScore) > PATTERNS.WIN * 0.5) blendedScore = rawScore;
-        
-        if(blendedScore > maxS) { 
-            maxS = blendedScore; 
-            best = topCans[i].idx; 
-            chosenMod = mod;
-        }
+
+        ranked.push({
+            idx,
+            score: blendedScore,
+            rawScore,
+            adaptiveContribution,
+            predictionContribution
+        });
+    }
+
+    ranked.sort((a, b) => b.score - a.score);
+    const rankedWithProb = getSoftmaxRanked(ranked, Math.max(0.02, profile.noise));
+    let best = rankedWithProb[0]?.idx ?? -1;
+
+    // 초반에는 약점이 보이도록 탐험 노이즈를 크게 두고, 몇 판 지나면 빠르게 줄임
+    if (rankedWithProb.length > 2 && Math.random() < profile.noise) {
+        best = sampleBySoftmax(rankedWithProb.slice(0, Math.min(6, rankedWithProb.length)), profile.noise);
+    }
+
+    const selected = rankedWithProb.find(r => r.idx === best) || rankedWithProb[0];
+    const compSum = Math.abs(selected?.rawScore || 0) + Math.abs(selected?.adaptiveContribution || 0) + Math.abs(selected?.predictionContribution || 0) || 1;
+    const heuristicPct = Math.round(Math.abs(selected?.rawScore || 0) / compSum * 100);
+    const adaptivePct = Math.round(Math.abs(selected?.adaptiveContribution || 0) / compSum * 100);
+    const predictionPct = Math.max(0, 100 - heuristicPct - adaptivePct);
+
+    const predEntries = Object.entries(userPredictionMap)
+        .map(([idx, s]) => ({ idx: Number(idx), score: Number(s) || 0 }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3);
+    const predSum = predEntries.reduce((acc, it) => acc + Math.max(0, it.score), 0) || 1;
+
+    lastDecisionTelemetry = {
+        heuristicPct,
+        adaptivePct,
+        predictionPct,
+        selectedProb: selected?.prob || 0,
+        botTop3: rankedWithProb.slice(0, 3).map(r => ({ idx: r.idx, prob: r.prob })),
+        userTop3: predEntries.map(p => ({ idx: p.idx, prob: Math.max(0, p.score) / predSum }))
+    };
+
+    pushLog(`결정 근거 비중: 수읽기 ${heuristicPct}% | 학습망 ${adaptivePct}% | 유저예측 ${predictionPct}%`, 'bot-sys');
+
+    if (lastDecisionTelemetry.userTop3.length > 0) {
+        const top = lastDecisionTelemetry.userTop3
+            .map(p => `(${p.idx % SIZE}, ${Math.floor(p.idx / SIZE)}) ${Math.round(p.prob * 100)}%`)
+            .join(' · ');
+        pushLog(`다음 당신의 수 예측 Top3: ${top}`, 'bot-think');
     }
     
     if (best !== originalBest) {
         if (stats.total > 0) {
-            pushLog(`잠깐! 방금 수읽기로 정한 자리가 제 신경망 오답 노트의 함정 확률과 유사하네요. 😱 수정합니다.`, 'bot-nn');
+            pushLog(`예측 엔진이 당신의 다음 수를 읽어내서 기존 착수를 방어형으로 수정했습니다. 😱`, 'bot-nn');
         } else {
-            pushLog(`본능적으로 그 자리는 조금 불길해 보이네요. 전략을 수정합니다. 🧐`, 'bot-nn');
+            pushLog(`초기 학습 단계라 실험적 착수를 섞고 있습니다. 곧 더 까다로워집니다. 🧐`, 'bot-nn');
         }
         await sleep(800);
         pushLog(`수읽기 대신 직감을 믿고 (${best%SIZE}, ${Math.floor(best/SIZE)}) 위치에 착수합니다. ✨`, 'bot-act');
@@ -450,6 +697,17 @@ async function endGame(res) {
     const avgProb = winProbTrace.reduce((a,b)=>a+b, 0) / winProbTrace.length;
     winProbHistory.push(avgProb);
     localStorage.setItem('gomoku-winprob-history', JSON.stringify(winProbHistory.slice(-20)));
+
+    playerModel.gamesAnalyzed = (playerModel.gamesAnalyzed || 0) + 1;
+    if (res === 'won') {
+        // 패배한 판의 사용자 공격 좌표를 강하게 저장해서 같은 공격 재등장 시 빠르게 방어한다.
+        gameHistory.forEach(h => {
+            if (h.player !== 1) return;
+            const w = h.idx;
+            playerModel.threatCells[w] = (playerModel.threatCells[w] || 0) + 3;
+        });
+    }
+    savePlayerModel();
     
     document.getElementById('modal-overlay').style.display = 'flex';
     document.getElementById('modal-title').innerText = res === 'won' ? "당신의 승리!" : (res === 'lost' ? "봇의 승리!" : "무승부!");
@@ -577,12 +835,28 @@ async function recalculateHeatmap() {
     for(let i=0; i<SIZE*SIZE; i++) if(board[i] === 0) emptyIdxs.push(i);
     
     if (emptyIdxs.length === 0) return;
-    
-    let mods = await getAdaptiveModifiersForCandidates(board, emptyIdxs, viewMode === 1 ? 2 : 1);
+
     let cells = [];
-    for(let i=0; i<emptyIdxs.length; i++) {
-        cells.push({idx: emptyIdxs[i], score: mods[i]}); 
+    if (viewMode === 1) {
+        let mods = await getAdaptiveModifiersForCandidates(board, emptyIdxs, 2);
+        for(let i=0; i<emptyIdxs.length; i++) {
+            cells.push({idx: emptyIdxs[i], score: mods[i]}); 
+        }
+    } else {
+        const predictionMap = getUserPredictionMap(board);
+        let maxPred = 0.001;
+        Object.values(predictionMap).forEach(v => { maxPred = Math.max(maxPred, Number(v) || 0); });
+        for (let i = 0; i < emptyIdxs.length; i++) {
+            const idx = emptyIdxs[i];
+            const p = (predictionMap[idx] || 0) / maxPred;
+            board[idx] = 1;
+            const userEval = evaluateBoard(board, 1);
+            board[idx] = 0;
+            const blunderRisk = clamp((-userEval) / 200000, 0, 1);
+            cells.push({ idx, score: clamp(p - blunderRisk * 0.8, -1, 1) });
+        }
     }
+
     cells.sort((a,b) => b.score - a.score);
     currentHeatmapData = cells;
     renderBoard(); // 비동기이므로 끝난 후 다시 렌더해줌
@@ -639,7 +913,50 @@ function updateUI() {
     const p = winProbTrace[winProbTrace.length-1] || 0.5;
     document.getElementById('prob-user').style.width = (1-p)*100 + '%'; document.getElementById('prob-user').innerText = `당신 ${Math.round((1-p)*100)}%`;
     document.getElementById('prob-bot').innerText = `봇 ${Math.round(p*100)}%`;
+    renderDecisionPanel();
     renderCharts();
+}
+
+function renderDecisionPanel() {
+    const h = document.getElementById('mix-heuristic');
+    const a = document.getElementById('mix-adaptive');
+    const p = document.getElementById('mix-prediction');
+    const cp = document.getElementById('mix-choice-prob');
+    const sig = document.getElementById('analysis-signal');
+    const userTop = document.getElementById('user-top3');
+    const botTop = document.getElementById('bot-top3');
+
+    if (!h || !a || !p || !cp || !sig || !userTop || !botTop) return;
+
+    h.innerText = `${lastDecisionTelemetry.heuristicPct || 0}%`;
+    a.innerText = `${lastDecisionTelemetry.adaptivePct || 0}%`;
+    p.innerText = `${lastDecisionTelemetry.predictionPct || 0}%`;
+    cp.innerText = `${Math.round((lastDecisionTelemetry.selectedProb || 0) * 100)}%`;
+
+    const analyzed = playerModel.gamesAnalyzed || 0;
+    const transitions = Object.keys(playerModel.transition || {}).length;
+    const threatSignals = Object.keys(playerModel.threatCells || {}).length;
+    sig.innerText = `분석 근거: 학습 반영 ${analyzed}판, 전이패턴 ${transitions}개, 위협좌표 ${threatSignals}개`;
+
+    if ((lastDecisionTelemetry.userTop3 || []).length === 0) {
+        userTop.innerText = '예측 데이터 준비 중...';
+    } else {
+        userTop.innerHTML = lastDecisionTelemetry.userTop3.map((m, i) => {
+            const x = m.idx % SIZE;
+            const y = Math.floor(m.idx / SIZE);
+            return `${i + 1}) (${x}, ${y}) - ${Math.round(m.prob * 100)}%`;
+        }).join('<br>');
+    }
+
+    if ((lastDecisionTelemetry.botTop3 || []).length === 0) {
+        botTop.innerText = '후보 평가 준비 중...';
+    } else {
+        botTop.innerHTML = lastDecisionTelemetry.botTop3.map((m, i) => {
+            const x = m.idx % SIZE;
+            const y = Math.floor(m.idx / SIZE);
+            return `${i + 1}) (${x}, ${y}) - ${Math.round(m.prob * 100)}%`;
+        }).join('<br>');
+    }
 }
 
 function renderCharts() {
@@ -728,6 +1045,7 @@ document.getElementById('btn-play-again').onclick = () => {
     board = Array(SIZE * SIZE).fill(0); 
     gameHistory = []; 
     winProbTrace = [0.5]; 
+    lastUserMoveIdx = null;
     
     // 모달 및 보드 상태 원복
     const overlay = document.getElementById('modal-overlay');
@@ -770,19 +1088,33 @@ document.getElementById('btn-toggle-heatmap').onclick = () => {
         document.getElementById('legend-neg-color').innerText = "● 보라색(-)";
         document.getElementById('legend-neg-text').innerText = ": 과거 함정 경험으로 인해 회피하는 자리";
     } else if (viewMode === 2) {
-        document.getElementById('legend-title').innerText = "사용자 수 예측 맵 (대리 관점)";
+        document.getElementById('legend-title').innerText = "사용자 수 확률 예측 맵 (실계산)";
         document.getElementById('legend-pos-color').style.color = '#ef4444';
         document.getElementById('legend-pos-color').innerText = "● 빨간색(+)";
-        document.getElementById('legend-pos-text').innerText = ": AI가 사용자의 다음 공격수로 예측하는 자리";
+        document.getElementById('legend-pos-text').innerText = ": 전이 패턴+위협도+국면을 합친 사용자 다음 수 확률이 높은 자리";
         document.getElementById('legend-neg-color').style.color = '#3b82f6';
         document.getElementById('legend-neg-color').innerText = "● 파란색(-)";
-        document.getElementById('legend-neg-text').innerText = ": 사용자가 두면 자멸하는 비효율적인 수";
+        document.getElementById('legend-neg-text').innerText = ": 사용자가 둘 확률은 있으나 즉시 악수로 분류된 자리";
     }
 
     recalculateHeatmap(); 
     renderBoard(); 
 };
-document.getElementById('btn-reset').onclick = () => { if(confirm("모든 기억과 승률 데이터를 지우시겠습니까?")) { localStorage.clear(); location.reload(); } };
+document.getElementById('btn-reset').onclick = () => {
+    if(confirm("모든 기억과 승률 데이터를 지우시겠습니까?")) {
+        localStorage.clear();
+        playerModel = createDefaultPlayerModel();
+        lastDecisionTelemetry = {
+            heuristicPct: 0,
+            adaptivePct: 0,
+            predictionPct: 0,
+            selectedProb: 0,
+            botTop3: [],
+            userTop3: []
+        };
+        location.reload();
+    }
+};
 document.getElementById('btn-export').onclick = () => { exportMemory(); };
 document.getElementById('import-file').addEventListener('change', importMemory);
 
