@@ -37,6 +37,8 @@ let playerModel = (() => {
     };
 })();
 
+const ADAPTIVE_MODEL_STORAGE_PREFIX = 'tensorflowjs_models/gomoku-adaptive-weights/';
+
 for (let i = gameHistory.length - 1; i >= 0; i--) {
     if (gameHistory[i].player === 1) {
         lastUserMoveIdx = gameHistory[i].idx;
@@ -56,6 +58,14 @@ function setStartupStatus(text, isReady = false) {
     if (!status || !statusText) return;
     statusText.textContent = text;
     status.classList.toggle('is-ready', isReady);
+}
+
+function hasSavedAdaptiveModel() {
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(ADAPTIVE_MODEL_STORAGE_PREFIX)) return true;
+    }
+    return false;
 }
 
 function pushLog(msg, type='bot-sys') {
@@ -172,7 +182,13 @@ async function initModel() {
     const token = ++modelLoadToken;
     model = createAdaptiveModel();
     modelReady = true;
-    setStartupStatus('기본 엔진으로 바로 시작할 수 있습니다. 이전 모델을 불러오는 중입니다.');
+    if (!hasSavedAdaptiveModel()) {
+        setStartupStatus('기본 엔진으로 바로 시작할 수 있습니다. 아직 저장된 학습 모델은 없습니다.', true);
+        updateUI();
+        return;
+    }
+
+    setStartupStatus('기본 엔진으로 바로 시작할 수 있습니다. 이전 학습 모델을 불러오는 중입니다.');
     updateUI();
 
     try {
@@ -184,7 +200,7 @@ async function initModel() {
         // 신규 CNN 구조 여부를 확인하여, 예전 모델이면 에러를 던져 초기화 유도
         if (loadedModel.inputs[0].shape[1] !== 225) throw new Error("Old model architecture");
         model = loadedModel;
-        setStartupStatus('이전 모델까지 불러왔습니다.', true);
+        setStartupStatus('이전 학습 모델까지 불러왔습니다.', true);
         updateUI();
     } catch (e) {
         if (token !== modelLoadToken) return;
@@ -192,13 +208,13 @@ async function initModel() {
             const staleKeys = [];
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
-                if (key && key.startsWith('tensorflowjs_models/gomoku-adaptive-weights/')) {
+                if (key && key.startsWith(ADAPTIVE_MODEL_STORAGE_PREFIX)) {
                     staleKeys.push(key);
                 }
             }
             staleKeys.forEach(k => localStorage.removeItem(k));
         }
-        setStartupStatus('기본 엔진으로 실행 중입니다. 저장된 모델은 아직 불러오지 못했습니다.', true);
+        setStartupStatus('기본 엔진으로 실행 중입니다. 저장된 학습 모델을 불러오지 못했습니다.', true);
     }
 }
 
@@ -1092,7 +1108,7 @@ document.getElementById('btn-toggle-heatmap').onclick = () => {
     } else if (viewMode === 3) {
         document.getElementById('legend-title').innerText = "봇 후보 확률 맵 (실계산)";
         document.getElementById('legend-pos-color').style.color = '#ef4444';
-        document.getElementById('legend-pos-color').innerText = "● 빨간색(+)")
+        document.getElementById('legend-pos-color').innerText = "● 빨간색(+)";
         document.getElementById('legend-pos-text').innerText = ": 봇이 실제로 둘 확률이 높은 후보";
         document.getElementById('legend-neg-color').style.color = '#f59e0b';
         document.getElementById('legend-neg-color').innerText = "● 주황색(-)";
@@ -1144,7 +1160,7 @@ document.getElementById('btn-start-load').addEventListener('click', () => {
 
 // 최초 실행 및 초기 상태
 isThinking = true; // 모달을 닫기 전까지는 착수 제한
-setStartupStatus('모델을 불러오는 중입니다. 잠시만 기다려 주세요.');
+setStartupStatus('게임 엔진을 준비 중입니다. 잠시만 기다려 주세요.');
 initModel(); recalculateHeatmap(); renderBoard();
 window.addEventListener('resize', () => {
     renderBoard();
