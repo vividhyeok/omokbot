@@ -15,11 +15,15 @@ let modelLoadToken = 0;
 const VIEW_MODES = ['시각화: 끄기', 'AI 뇌구조 맵 보기', '유저 수 예측 보기', '봇 후보 확률 보기'];
 let hoverPos = null; 
 let lastUserMoveIdx = null;
+const STYLE_FIRST_MODE = true;
 
 const PLAYER_MODEL_KEY = 'gomoku-player-model';
 const createDefaultPlayerModel = () => ({
     moveCount: Array(SIZE * SIZE).fill(0),
+    openingMoves: Array(SIZE * SIZE).fill(0),
+    regionBias: Array(9).fill(0),
     transition: {},
+    relativeReplies: {},
     threatCells: {},
     gamesAnalyzed: 0
 });
@@ -31,7 +35,14 @@ let playerModel = (() => {
     }
     return {
         moveCount: raw.moveCount,
+        openingMoves: Array.isArray(raw.openingMoves) && raw.openingMoves.length === SIZE * SIZE
+            ? raw.openingMoves
+            : Array(SIZE * SIZE).fill(0),
+        regionBias: Array.isArray(raw.regionBias) && raw.regionBias.length === 9
+            ? raw.regionBias
+            : Array(9).fill(0),
         transition: raw.transition || {},
+        relativeReplies: raw.relativeReplies || {},
         threatCells: raw.threatCells || {},
         gamesAnalyzed: Number(raw.gamesAnalyzed) || 0
     };
@@ -104,26 +115,81 @@ const PATTERNS = { WIN: 10000000, OPEN_4: 1000000, BLOCKED_4: 100000, OPEN_3: 10
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
 function getDifficultyProfile(totalGames) {
-    if (totalGames < 5) {
+    if (totalGames === 0) {
+        return {
+            depth: 0,
+            adaptiveWeight: 0,
+            predictionWeight: 600,
+            rawScoreWeight: 0.35,
+            noise: 1.15,
+            topN: 14,
+            pickTop: 9,
+            secondTierChance: 0.68,
+            secondTierOffset: 2,
+            forcedBlockPenalty: 650000,
+            userImmediatePenalty: 120000
+        };
+    }
+    if (totalGames < 3) {
+        return {
+            depth: 0,
+            adaptiveWeight: 300 + totalGames * 500,
+            predictionWeight: 1200 + totalGames * 900,
+            rawScoreWeight: 0.45 + totalGames * 0.1,
+            noise: 0.92 - totalGames * 0.1,
+            topN: 12 + totalGames * 2,
+            pickTop: 8 + totalGames,
+            secondTierChance: 0.42 - totalGames * 0.1,
+            secondTierOffset: 1,
+            forcedBlockPenalty: 700000,
+            userImmediatePenalty: 150000 + totalGames * 50000
+        };
+    }
+    if (totalGames < 6) {
+        const t = (totalGames - 3) / 3;
         return {
             depth: 1,
-            adaptiveWeight: 2500 + totalGames * 900,
-            predictionWeight: 5000 + totalGames * 1300,
-            noise: 0.52 - totalGames * 0.07,
-            topN: 6 + totalGames
+            adaptiveWeight: Math.round(2500 + t * 8500),
+            predictionWeight: Math.round(6000 + t * 9000),
+            rawScoreWeight: 0.72 + t * 0.18,
+            noise: Math.max(0.16, 0.5 - t * 0.18),
+            topN: 10 + Math.round(t * 4),
+            pickTop: 6 + Math.round(t * 2),
+            secondTierChance: Math.max(0.08, 0.16 - t * 0.08),
+            secondTierOffset: 1,
+            forcedBlockPenalty: 780000,
+            userImmediatePenalty: Math.round(240000 + t * 100000)
         };
     }
-    if (totalGames < 8) {
-        const t = (totalGames - 5) / 3;
+    if (totalGames < 10) {
+        const t = (totalGames - 6) / 4;
         return {
             depth: 1 + Math.round(t),
-            adaptiveWeight: Math.round(7000 + t * 26000),
-            predictionWeight: Math.round(14000 + t * 42000),
-            noise: Math.max(0.02, 0.22 - t * 0.18),
-            topN: 10 + Math.round(t * 6)
+            adaptiveWeight: Math.round(12000 + t * 20000),
+            predictionWeight: Math.round(22000 + t * 42000),
+            rawScoreWeight: 1,
+            noise: Math.max(0.04, 0.18 - t * 0.12),
+            topN: 14 + Math.round(t * 6),
+            pickTop: 5,
+            secondTierChance: Math.max(0, 0.05 - t * 0.05),
+            secondTierOffset: 1,
+            forcedBlockPenalty: 850000,
+            userImmediatePenalty: Math.round(320000 + t * 30000)
         };
     }
-    return { depth: 2, adaptiveWeight: 32000, predictionWeight: 64000, noise: 0.01, topN: 20 };
+    return {
+        depth: 2,
+        adaptiveWeight: 32000,
+        predictionWeight: 64000,
+        rawScoreWeight: 1,
+        noise: 0.01,
+        topN: 20,
+        pickTop: 4,
+        secondTierChance: 0,
+        secondTierOffset: 1,
+        forcedBlockPenalty: 900000,
+        userImmediatePenalty: 350000
+    };
 }
 
 function sampleBySoftmax(rankedMoves, temperature) {
@@ -147,6 +213,29 @@ function getSoftmaxRanked(rankedMoves, temperature) {
     const exps = rankedMoves.map(m => Math.exp((m.score - maxScore) / (Math.abs(maxScore) * 0.05 + t * 10000)));
     const sum = exps.reduce((a, b) => a + b, 0) || 1;
     return rankedMoves.map((m, i) => ({ ...m, prob: exps[i] / sum }));
+}
+
+function chooseMoveFromRanked(rankedMoves, profile) {
+    if (!rankedMoves.length) return -1;
+
+    const pickTop = Math.max(1, Math.min(profile.pickTop || 6, rankedMoves.length));
+    const pool = rankedMoves.slice(0, pickTop);
+    if (pool.length === 1) return pool[0].idx;
+
+    const secondTierChance = Math.max(0, profile.secondTierChance || 0);
+    const secondTierOffset = Math.max(1, profile.secondTierOffset || 1);
+    if (secondTierChance > 0 && pool.length > secondTierOffset + 1 && Math.random() < secondTierChance) {
+        const secondTierPool = pool.slice(secondTierOffset, Math.min(pool.length, secondTierOffset + 4));
+        if (secondTierPool.length) {
+            return sampleBySoftmax(secondTierPool, Math.max(0.3, profile.noise + 0.25));
+        }
+    }
+
+    if (pool.length > 2 && Math.random() < profile.noise) {
+        return sampleBySoftmax(pool, Math.max(0.12, profile.noise));
+    }
+
+    return pool[0].idx;
 }
 
 async function getBotCandidateHeatmap(b) {
@@ -440,6 +529,38 @@ function countNearbyStones(b, idx, p) {
     return c;
 }
 
+function getBoardRegionIndex(x, y) {
+    const rx = Math.min(2, Math.floor(x / 5));
+    const ry = Math.min(2, Math.floor(y / 5));
+    return ry * 3 + rx;
+}
+
+function getCurrentUserMoveCount() {
+    let count = 0;
+    for (let i = 0; i < gameHistory.length; i++) {
+        if (gameHistory[i].player === 1) count++;
+    }
+    return count;
+}
+
+function getPlayerStyleConfidence() {
+    const openingTotal = playerModel.openingMoves.reduce((sum, v) => sum + (Number(v) || 0), 0);
+    const regionTotal = playerModel.regionBias.reduce((sum, v) => sum + (Number(v) || 0), 0);
+    const relativeTotal = Object.values(playerModel.relativeReplies).reduce((sum, v) => sum + (Number(v) || 0), 0);
+    const threatTotal = Object.values(playerModel.threatCells).reduce((sum, v) => sum + (Number(v) || 0), 0);
+    const games = Number(playerModel.gamesAnalyzed) || 0;
+
+    return clamp(
+        Math.min(1, openingTotal / 9) * 0.2 +
+        Math.min(1, regionTotal / 18) * 0.15 +
+        Math.min(1, relativeTotal / 16) * 0.35 +
+        Math.min(1, threatTotal / 20) * 0.1 +
+        Math.min(1, games / 6) * 0.2,
+        0,
+        1
+    );
+}
+
 function getUserPredictionMap(b) {
     const map = {};
     const empty = [];
@@ -449,9 +570,14 @@ function getUserPredictionMap(b) {
     const immediateWins = getImmediateWinningMoves(b, 1, 10);
     immediateWins.forEach(idx => { map[idx] = (map[idx] || 0) + 1.2; });
 
+    const userMoveCount = getCurrentUserMoveCount();
     let maxMoveCount = Math.max(1, ...playerModel.moveCount);
+    let maxOpening = Math.max(1, ...playerModel.openingMoves);
+    let maxRegion = Math.max(1, ...playerModel.regionBias);
     let maxThreat = 1;
     Object.values(playerModel.threatCells).forEach(v => { maxThreat = Math.max(maxThreat, Number(v) || 0); });
+    let maxRelative = 1;
+    Object.values(playerModel.relativeReplies).forEach(v => { maxRelative = Math.max(maxRelative, Number(v) || 0); });
 
     let maxTransition = 1;
     let transition = {};
@@ -466,14 +592,29 @@ function getUserPredictionMap(b) {
     empty.forEach(idx => {
         const x = idx % SIZE;
         const y = Math.floor(idx / SIZE);
+        const regionIdx = getBoardRegionIndex(x, y);
         const dist = Math.abs(x - lastX) + Math.abs(y - lastY);
         const localAggro = countNearbyStones(b, idx, 1) / 8;
         const moveFreq = (playerModel.moveCount[idx] || 0) / maxMoveCount;
+        const openingFreq = (playerModel.openingMoves[idx] || 0) / maxOpening;
+        const regionFreq = (playerModel.regionBias[regionIdx] || 0) / maxRegion;
         const threatFreq = (Number(playerModel.threatCells[idx]) || 0) / maxThreat;
         const transFreq = (Number(transition[idx]) || 0) / maxTransition;
+        const relativeKey = `${x - lastX},${y - lastY}`;
+        const relativeFreq = (Number(playerModel.relativeReplies[relativeKey]) || 0) / maxRelative;
         const recency = 1 / (1 + dist);
+        const openingPhase = userMoveCount <= 3 ? 1 : 0;
+        const midPhase = userMoveCount >= 2 ? 1 : 0;
 
-        const score = moveFreq * 0.25 + threatFreq * 0.35 + transFreq * 0.2 + localAggro * 0.15 + recency * 0.05;
+        const score =
+            moveFreq * 0.12 +
+            openingFreq * (openingPhase ? 0.34 : 0.06) +
+            regionFreq * (openingPhase ? 0.16 : 0.08) +
+            threatFreq * 0.18 +
+            transFreq * 0.18 +
+            relativeFreq * (midPhase ? 0.26 : 0.12) +
+            localAggro * 0.08 +
+            recency * 0.06;
         map[idx] = (map[idx] || 0) + score;
     });
 
@@ -482,12 +623,23 @@ function getUserPredictionMap(b) {
 
 function updatePlayerModelAfterUserMove(x, y) {
     const idx = y * SIZE + x;
+    const userMoveNumber = getCurrentUserMoveCount();
     playerModel.moveCount[idx] = (playerModel.moveCount[idx] || 0) + 1;
+    if (userMoveNumber <= 3) {
+        playerModel.openingMoves[idx] = (playerModel.openingMoves[idx] || 0) + 1;
+    }
+    const regionIdx = getBoardRegionIndex(x, y);
+    playerModel.regionBias[regionIdx] = (playerModel.regionBias[regionIdx] || 0) + 1;
 
     if (lastUserMoveIdx !== null) {
         if (!playerModel.transition[lastUserMoveIdx]) playerModel.transition[lastUserMoveIdx] = {};
         const t = playerModel.transition[lastUserMoveIdx];
         t[idx] = (t[idx] || 0) + 1;
+
+        const lastX = lastUserMoveIdx % SIZE;
+        const lastY = Math.floor(lastUserMoveIdx / SIZE);
+        const relativeKey = `${x - lastX},${y - lastY}`;
+        playerModel.relativeReplies[relativeKey] = (playerModel.relativeReplies[relativeKey] || 0) + 1;
     }
     lastUserMoveIdx = idx;
 
@@ -585,14 +737,30 @@ async function userMove(x, y) {
 }
 
 async function botMove() {
-    pushLog(`수읽기 중...`, 'bot-sys');
+    pushLog(STYLE_FIRST_MODE ? `패턴 분석 중...` : `수읽기 중...`, 'bot-sys');
     await sleep(500);
 
     const profile = getDifficultyProfile(stats.total);
+    const styleConfidence = getPlayerStyleConfidence();
     let cans = getCandidates(board);
     let scoredCans = [];
     const userPredictionMap = getUserPredictionMap(board);
+    const botWinningMoves = getImmediateWinningMoves(board, 2, 6);
     const forcedBlocks = new Set(getImmediateWinningMoves(board, 1, 10));
+
+    if (botWinningMoves.length) {
+        const bestWin = botWinningMoves.sort((a, b) => (userPredictionMap[b] || 0) - (userPredictionMap[a] || 0))[0];
+        pushLog(`끝낼 수 있는 수를 선택했습니다.`, 'bot-act');
+        await sleep(200);
+        makeMove(bestWin % SIZE, Math.floor(bestWin / SIZE), 2);
+        const winState = checkWin(bestWin % SIZE, Math.floor(bestWin / SIZE), 2);
+        if (winState) {
+            drawWinLine(winState);
+            await sleep(1000);
+            endGame('lost');
+        }
+        return;
+    }
 
     // 1단계: 끊어진 윈도우까지 탐지하는 향상된 상태 평가
     for(let idx of cans) {
@@ -608,11 +776,13 @@ async function botMove() {
     
     await sleep(300);
 
-    // 2단계: 진행도에 따라 깊이를 올리는 Minimax
-    for(let i=0; i<topCans.length; i++) {
-        board[topCans[i].idx] = 2; 
-        topCans[i].rawScore = godModeEvaluate(board, profile.depth, -Infinity, Infinity, false); 
-        board[topCans[i].idx] = 0;
+    // 스타일 우선 모드에서는 깊은 수읽기를 끄고, 즉사수 정도만 최소 전술 안전장치로 유지한다.
+    if (!STYLE_FIRST_MODE && profile.depth > 0) {
+        for(let i=0; i<topCans.length; i++) {
+            board[topCans[i].idx] = 2; 
+            topCans[i].rawScore = godModeEvaluate(board, profile.depth, -Infinity, Infinity, false); 
+            board[topCans[i].idx] = 0;
+        }
     }
     
     // 수읽기 결과로 다시 정렬 (수읽기로 발견한 치명적 함정 픽은 점수가 나락으로 감)
@@ -632,19 +802,24 @@ async function botMove() {
         let mod = mods[i]; 
         let idx = topCans[i].idx;
         let predictionScore = userPredictionMap[idx] || 0;
-        
-        const adaptiveContribution = mod * profile.adaptiveWeight;
-        const predictionContribution = predictionScore * profile.predictionWeight;
-        let blendedScore = rawScore + adaptiveContribution + predictionContribution;
+        const rawWeight = STYLE_FIRST_MODE ? Math.min(profile.rawScoreWeight || 1, 0.22 + (1 - styleConfidence) * 0.12) : (profile.rawScoreWeight || 1);
+        const adaptiveWeight = STYLE_FIRST_MODE ? profile.adaptiveWeight * 0.12 : profile.adaptiveWeight;
+        const predictionWeight = STYLE_FIRST_MODE
+            ? profile.predictionWeight * 0.85 + 9000 + styleConfidence * 16000
+            : profile.predictionWeight;
+
+        const adaptiveContribution = mod * adaptiveWeight;
+        const predictionContribution = predictionScore * predictionWeight;
+        let blendedScore = rawScore * rawWeight + adaptiveContribution + predictionContribution;
 
         board[idx] = 2;
         const userImmediateAfter = getImmediateWinningMoves(board, 1, 3).length;
         board[idx] = 0;
 
         if (forcedBlocks.size > 0 && !forcedBlocks.has(idx)) {
-            blendedScore -= 800000;
+            blendedScore -= STYLE_FIRST_MODE ? Math.max(profile.forcedBlockPenalty, 1200000) : profile.forcedBlockPenalty;
         }
-        blendedScore -= userImmediateAfter * 350000;
+        blendedScore -= userImmediateAfter * (STYLE_FIRST_MODE ? Math.max(90000, profile.userImmediatePenalty * 0.45) : profile.userImmediatePenalty);
         
         // 확정적인 승/패 방어는 건드리지 않음
         if (Math.abs(rawScore) > PATTERNS.WIN * 0.5) blendedScore = rawScore;
@@ -660,16 +835,16 @@ async function botMove() {
 
     ranked.sort((a, b) => b.score - a.score);
     const rankedWithProb = getSoftmaxRanked(ranked, Math.max(0.02, profile.noise));
-    let best = rankedWithProb[0]?.idx ?? -1;
-
-    // 초반에는 약점이 보이도록 탐험 노이즈를 크게 두고, 몇 판 지나면 빠르게 줄임
-    if (rankedWithProb.length > 2 && Math.random() < profile.noise) {
-        best = sampleBySoftmax(rankedWithProb.slice(0, Math.min(6, rankedWithProb.length)), profile.noise);
-    }
+    let best = chooseMoveFromRanked(rankedWithProb, profile);
 
     clearDecisionTelemetry();
-    
-    if (best !== originalBest) {
+
+    const selectedMove = ranked.find(item => item.idx === best);
+    if (forcedBlocks.size > 0 && forcedBlocks.has(best)) {
+        pushLog(`막아야 하는 자리를 먼저 방어했습니다.`, 'bot-warn');
+    } else if (selectedMove && selectedMove.predictionContribution > Math.abs(selectedMove.rawScore) * 0.5) {
+        pushLog(`최근 자주 두는 흐름을 읽고 먼저 선점했습니다.`, 'bot-nn');
+    } else if (best !== originalBest) {
         pushLog(`착수 위치를 수정했습니다.`, 'bot-nn');
     } else {
         pushLog(`(${best%SIZE}, ${Math.floor(best/SIZE)})`, 'bot-act');
