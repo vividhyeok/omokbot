@@ -306,6 +306,51 @@ footer {
 .footer-link:hover { color: #000; }
 #import-file, #startup-import-file { display: none; }
 
+.viz-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.viz-label {
+    font-weight: 700;
+    color: #374151;
+    white-space: nowrap;
+}
+
+.viz-btn-group {
+    display: inline-flex;
+    align-items: center;
+    background: #e5e7eb;
+    border: 1px solid #d1d5db;
+    border-radius: 999px;
+    padding: 2px;
+    gap: 2px;
+}
+
+.viz-btn {
+    border: none;
+    background: transparent;
+    color: #4b5563;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 6px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s, transform 0.2s;
+    white-space: nowrap;
+}
+
+.viz-btn:hover {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.viz-btn.is-active {
+    background: #2563eb;
+    color: #ffffff;
+}
+
 /* =======================================================
    반응형 미디어 쿼리
    ======================================================= */
@@ -378,6 +423,15 @@ footer {
         justify-content: center;
         gap: 10px;
         margin-top: 5px;
+    }
+    .viz-control {
+        width: 100%;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+    .viz-btn-group {
+        width: 100%;
+        justify-content: center;
     }
     #badge-overlay { top: 10px; }
 }

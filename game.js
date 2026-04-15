@@ -677,6 +677,59 @@ function buildProbabilityHeatmapFromMap(scoreMap, maxValue = 1) {
 
 function clearDecisionTelemetry() {}
 
+function updateVisualizationLegend() {
+    if (viewMode === 0) return;
+
+    if (viewMode === 1) {
+        document.getElementById('legend-title').innerText = "봇 우선 확률 시각화";
+        document.getElementById('legend-pos-color').style.color = '#2563eb';
+        document.getElementById('legend-pos-color').innerText = "● 파란색";
+        document.getElementById('legend-pos-text').innerText = ": 봇이 우선적으로 검토하는 자리";
+        document.getElementById('legend-neg-color').style.color = '#64748b';
+        document.getElementById('legend-neg-color').innerText = "● 회색";
+        document.getElementById('legend-neg-text').innerText = ": 상대적으로 가능성이 낮은 자리";
+    } else if (viewMode === 2) {
+        document.getElementById('legend-title').innerText = "사용자 다음 수 확률 시각화";
+        document.getElementById('legend-pos-color').style.color = '#ef4444';
+        document.getElementById('legend-pos-color').innerText = "● 빨간색";
+        document.getElementById('legend-pos-text').innerText = ": 사용자가 다음에 둘 가능성이 높은 자리";
+        document.getElementById('legend-neg-color').style.color = '#94a3b8';
+        document.getElementById('legend-neg-color').innerText = "● 옅은 회색";
+        document.getElementById('legend-neg-text').innerText = ": 상대적으로 덜 선택될 자리";
+    } else if (viewMode === 3) {
+        document.getElementById('legend-title').innerText = "봇 선택 확률 시각화";
+        document.getElementById('legend-pos-color').style.color = '#10b981';
+        document.getElementById('legend-pos-color').innerText = "● 초록색";
+        document.getElementById('legend-pos-text').innerText = ": 봇이 실제로 선택할 가능성이 높은 후보";
+        document.getElementById('legend-neg-color').style.color = '#94a3b8';
+        document.getElementById('legend-neg-color').innerText = "● 회색";
+        document.getElementById('legend-neg-text').innerText = ": 상대적으로 낮은 선택 확률의 후보";
+    }
+}
+
+function updateVisualizationControls() {
+    document.querySelectorAll('.viz-btn[data-view-mode]').forEach(btn => {
+        const mode = Number(btn.dataset.viewMode);
+        btn.classList.toggle('is-active', mode === viewMode);
+    });
+}
+
+function setViewMode(mode) {
+    const normalized = Number.isFinite(mode) ? Math.max(0, Math.min(3, mode)) : 0;
+    viewMode = normalized;
+    updateVisualizationControls();
+
+    const legend = document.getElementById('heatmap-legend');
+    if (legend) legend.style.display = viewMode > 0 ? 'block' : 'none';
+
+    if (viewMode > 0) {
+        updateVisualizationLegend();
+    }
+
+    recalculateHeatmap();
+    renderBoard();
+}
+
 // ==========================================
 // 인터랙션
 // ==========================================
@@ -1269,55 +1322,52 @@ if(document.getElementById('btn-view-board')) {
         document.getElementById('btn-view-board').style.display = 'none';
     };
 }
-document.getElementById('btn-toggle-heatmap').onclick = () => { 
-    viewMode = (viewMode + 1) % 4;
-    document.getElementById('btn-toggle-heatmap').innerText = VIEW_MODES[viewMode]; 
-    document.getElementById('heatmap-legend').style.display = viewMode > 0 ? 'block' : 'none';
-    
-    if (viewMode === 1) {
-        document.getElementById('legend-title').innerText = "봇 우선 확률 시각화";
-        document.getElementById('legend-pos-color').style.color = '#2563eb';
-        document.getElementById('legend-pos-color').innerText = "● 파란색";
-        document.getElementById('legend-pos-text').innerText = ": 봇이 우선적으로 검토하는 자리";
-        document.getElementById('legend-neg-color').style.color = '#64748b';
-        document.getElementById('legend-neg-color').innerText = "● 회색";
-        document.getElementById('legend-neg-text').innerText = ": 상대적으로 가능성이 낮은 자리";
-    } else if (viewMode === 2) {
-        document.getElementById('legend-title').innerText = "사용자 다음 수 확률 시각화";
-        document.getElementById('legend-pos-color').style.color = '#ef4444';
-        document.getElementById('legend-pos-color').innerText = "● 빨간색";
-        document.getElementById('legend-pos-text').innerText = ": 사용자가 다음에 둘 가능성이 높은 자리";
-        document.getElementById('legend-neg-color').style.color = '#94a3b8';
-        document.getElementById('legend-neg-color').innerText = "● 옅은 회색";
-        document.getElementById('legend-neg-text').innerText = ": 상대적으로 덜 선택될 자리";
-    } else if (viewMode === 3) {
-        document.getElementById('legend-title').innerText = "봇 선택 확률 시각화";
-        document.getElementById('legend-pos-color').style.color = '#10b981';
-        document.getElementById('legend-pos-color').innerText = "● 초록색";
-        document.getElementById('legend-pos-text').innerText = ": 봇이 실제로 선택할 가능성이 높은 후보";
-        document.getElementById('legend-neg-color').style.color = '#94a3b8';
-        document.getElementById('legend-neg-color').innerText = "● 회색";
-        document.getElementById('legend-neg-text').innerText = ": 상대적으로 낮은 선택 확률의 후보";
-    }
-
-    recalculateHeatmap(); 
-    renderBoard(); 
-};
-document.getElementById('btn-reset').onclick = () => {
+document.querySelectorAll('.viz-btn[data-view-mode]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        setViewMode(Number(btn.dataset.viewMode));
+    });
+});
+document.getElementById('btn-reset').onclick = async () => {
     if(confirm("모든 기억과 승률 데이터를 지우시겠습니까?")) {
         modelLoadToken++;
+        try { await tf.io.removeModel('localstorage://gomoku-adaptive-weights'); } catch (e) {}
+        try { await tf.io.removeModel('indexeddb://gomoku-adaptive-weights'); } catch (e) {}
         localStorage.clear();
+
+        stats = { won: 0, lost: 0, draws: 0, total: 0 };
+        lossHistory = [];
+        winProbHistory = [];
         playerModel = createDefaultPlayerModel();
+
         clearDecisionTelemetry();
+        currentHeatmapData = null;
+        hoverPos = null;
+
         board = Array(SIZE * SIZE).fill(0);
         gameHistory = [];
         winProbTrace = [0.5];
         lastUserMoveIdx = null;
+
+        setViewMode(0);
+
+        const modalOverlay = document.getElementById('modal-overlay');
+        modalOverlay.style.display = 'none';
+        modalOverlay.style.background = '';
+        const modalCard = document.querySelector('#modal-overlay .modal-card');
+        if (modalCard) modalCard.style.cssText = '';
+        const viewBoardBtn = document.getElementById('btn-view-board');
+        if (viewBoardBtn) viewBoardBtn.style.display = 'inline-block';
+
+        const consoleEl = document.getElementById('ai-console');
+        if (consoleEl) {
+            consoleEl.innerHTML = '<div class="chat-bubble bot-sys">대국 준비 완료! 당신의 습관을 학습하며 방어할 준비가 되었습니다.</div>';
+        }
+
         model = createAdaptiveModel();
         modelReady = true;
         isThinking = true;
         document.getElementById('startup-overlay').style.display = 'flex';
-        setStartupStatus('게임 환경 확인 중', false, '기본 엔진을 다시 준비하고 있습니다.');
+        setStartupStatus('초기화 완료', true, '기록과 모델을 모두 비웠습니다. 게임 시작을 눌러 새로 시작하세요.');
         recalculateHeatmap();
         renderBoard();
         updateUI();
@@ -1351,6 +1401,7 @@ document.getElementById('btn-start-load').addEventListener('click', () => {
 isThinking = true; // 모달을 닫기 전까지는 착수 제한
 setStartupStatus('게임 환경 확인 중', false, '엔진과 저장된 데이터를 확인하고 있습니다.');
 initModel(); recalculateHeatmap(); renderBoard();
+updateVisualizationControls();
 window.addEventListener('resize', () => {
     renderBoard();
 });

@@ -78,7 +78,15 @@
 <footer>
     <div id="history-text">전적: 0승 0무 0패</div>
     <div class="footer-btns">
-        <span class="footer-link" id="btn-toggle-heatmap">확률 시각화: 끄기</span>
+        <div class="viz-control" aria-label="확률 시각화 모드">
+            <span class="viz-label">확률 시각화</span>
+            <div class="viz-btn-group" role="group" aria-label="확률 시각화 선택">
+                <button type="button" class="viz-btn is-active" data-view-mode="0">끔</button>
+                <button type="button" class="viz-btn" data-view-mode="1">봇 우선</button>
+                <button type="button" class="viz-btn" data-view-mode="2">사용자 예측</button>
+                <button type="button" class="viz-btn" data-view-mode="3">봇 선택</button>
+            </div>
+        </div>
         <span class="footer-link" id="btn-export">기억 파일로 내보내기 📥</span>
         <span class="footer-link" id="btn-reset" style="color: #ef4444;">전체 초기화</span>
         <input type="file" id="import-file" accept=".json">
