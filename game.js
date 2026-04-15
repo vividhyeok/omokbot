@@ -67,19 +67,25 @@ const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
 function getDifficultyProfile(totalGames) {
     if (totalGames < 5) {
-        return { depth: 1, adaptiveWeight: 4000 + totalGames * 1000, predictionWeight: 9000 + totalGames * 1500, noise: 0.42 - totalGames * 0.04, topN: 8 + totalGames };
+        return {
+            depth: 1,
+            adaptiveWeight: 2500 + totalGames * 900,
+            predictionWeight: 5000 + totalGames * 1300,
+            noise: 0.52 - totalGames * 0.07,
+            topN: 6 + totalGames
+        };
     }
     if (totalGames < 8) {
         const t = (totalGames - 5) / 3;
         return {
             depth: 1 + Math.round(t),
-            adaptiveWeight: Math.round(9000 + t * 17000),
-            predictionWeight: Math.round(18000 + t * 34000),
-            noise: Math.max(0.03, 0.18 - t * 0.13),
-            topN: 12 + Math.round(t * 4)
+            adaptiveWeight: Math.round(7000 + t * 26000),
+            predictionWeight: Math.round(14000 + t * 42000),
+            noise: Math.max(0.02, 0.22 - t * 0.18),
+            topN: 10 + Math.round(t * 6)
         };
     }
-    return { depth: 2, adaptiveWeight: 26000, predictionWeight: 52000, noise: 0.02, topN: 18 };
+    return { depth: 2, adaptiveWeight: 32000, predictionWeight: 64000, noise: 0.01, topN: 20 };
 }
 
 function sampleBySoftmax(rankedMoves, temperature) {
