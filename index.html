@@ -50,17 +50,6 @@
             </div>
         </div>
 
-        <div class="panel-section" id="section-decision">
-            <div class="section-title">결정 근거 (실시간)</div>
-            <div class="section-body">
-                <div class="stat-row"><span>수읽기 기여</span><span id="mix-heuristic" class="stat-val">0%</span></div>
-                <div class="stat-row"><span>학습망 기여</span><span id="mix-adaptive" class="stat-val">0%</span></div>
-                <div class="stat-row"><span>유저예측 기여</span><span id="mix-prediction" class="stat-val">0%</span></div>
-                <div class="stat-row"><span>현재 선택수 확률</span><span id="mix-choice-prob" class="stat-val">-</span></div>
-                <div style="font-size:0.78rem; margin-top:8px; color:#4b5563;" id="analysis-signal">아직 수집된 분석 데이터가 없습니다.</div>
-            </div>
-        </div>
-
         <div class="panel-section collapsed" id="section-momentum">
             <div class="section-title">실시간 전황 (수읽기 기반)</div>
             <div class="section-body">
@@ -70,7 +59,7 @@
         </div>
 
         <div class="panel-section" id="section-console">
-            <div class="section-title">오목봇의 속마음 💬</div>
+            <div class="section-title">오목봇 로그</div>
             <div class="section-body">
                 <div id="ai-console">
                     <div class="chat-bubble bot-sys">대국 준비 완료! 당신의 습관을 학습하며 방어할 준비가 되었습니다.</div>
@@ -78,31 +67,6 @@
             </div>
         </div>
 
-        <div class="panel-section collapsed" id="section-prediction-rank">
-            <div class="section-title">다음 수 예측 Top3</div>
-            <div class="section-body" id="user-top3" style="font-size:0.8rem; color:#374151;">
-                예측 데이터 준비 중...
-            </div>
-        </div>
-
-        <div class="panel-section collapsed" id="section-bot-rank">
-            <div class="section-title">봇 후보수 확률 Top3</div>
-            <div class="section-body" id="bot-top3" style="font-size:0.8rem; color:#374151;">
-                후보 평가 준비 중...
-            </div>
-        </div>
-
-        <div class="panel-section collapsed" id="section-loss">
-            <div class="section-title">신경망 오차 (Loss) 변화</div>
-            <div class="section-body">
-                <div class="stat-row">
-                    <span>최종 손실률 (낮을수록 좋음)</span>
-                    <span id="stat-loss" class="stat-val">N/A</span>
-                </div>
-                <div class="chart-container" id="loss-chart"></div>
-                <div style="font-size: 0.7rem; color: #888; text-align: center; margin-top: 5px;">과거 대국을 통한 오차 수정 이력</div>
-            </div>
-        </div>
     </aside>
 </main>
 

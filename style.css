@@ -74,8 +74,8 @@ canvas {
 }
 
 #side-panel {
-    width: 360px;
-    min-width: 360px;
+    width: 400px;
+    min-width: 400px;
     background: var(--panel-bg);
     border-left: 1px solid #ddd;
     display: flex;
@@ -85,7 +85,7 @@ canvas {
 }
 
 .panel-section {
-    padding: 1.25rem;
+    padding: 1rem 1.1rem;
     border-bottom: 1px solid #eee;
 }
 
@@ -99,6 +99,7 @@ canvas {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    word-break: keep-all;
 }
 
 /* 아코디언 화살표(데스크탑에선 숨김) */
@@ -194,7 +195,7 @@ canvas {
 #ai-console {
     background: #fdfbf7;
     padding: 15px 10px;
-    height: 220px;
+    height: 180px;
     overflow-y: auto;
     border-radius: 8px;
     border: 1px solid #eaeaea;
@@ -210,8 +211,14 @@ canvas {
     max-width: 90%;
     line-height: 1.4;
     word-break: keep-all;
+    overflow-wrap: anywhere;
     position: relative;
     animation: fadeIn 0.3s ease-out forwards;
+}
+
+.section-body {
+    overflow-wrap: anywhere;
+    word-break: keep-all;
 }
 
 @keyframes fadeIn {

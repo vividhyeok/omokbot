@@ -11,17 +11,9 @@ let stats = JSON.parse(localStorage.getItem('gomoku-stats')) || { won: 0, lost: 
 let lossHistory = JSON.parse(localStorage.getItem('gomoku-loss-history')) || [];
 let winProbHistory = JSON.parse(localStorage.getItem('gomoku-winprob-history')) || [];
 let viewMode = 0, isThinking = false, model = null, modelReady = false;
-const VIEW_MODES = ['시각화: 끄기', 'AI 뇌구조 맵 보기', '유저 공격 예측 보기'];
+const VIEW_MODES = ['시각화: 끄기', 'AI 뇌구조 맵 보기', '유저 수 예측 보기', '봇 후보 확률 보기'];
 let hoverPos = null; 
 let lastUserMoveIdx = null;
-let lastDecisionTelemetry = {
-    heuristicPct: 0,
-    adaptivePct: 0,
-    predictionPct: 0,
-    selectedProb: 0,
-    botTop3: [],
-    userTop3: []
-};
 
 const PLAYER_MODEL_KEY = 'gomoku-player-model';
 const createDefaultPlayerModel = () => ({
@@ -74,13 +66,20 @@ const PATTERNS = { WIN: 10000000, OPEN_4: 1000000, BLOCKED_4: 100000, OPEN_3: 10
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
 function getDifficultyProfile(totalGames) {
-    if (totalGames < 2) {
-        return { depth: 1, adaptiveWeight: 8000, predictionWeight: 18000, noise: 0.28, topN: 12 };
+    if (totalGames < 5) {
+        return { depth: 1, adaptiveWeight: 4000 + totalGames * 1000, predictionWeight: 9000 + totalGames * 1500, noise: 0.42 - totalGames * 0.04, topN: 8 + totalGames };
     }
-    if (totalGames < 6) {
-        return { depth: 2, adaptiveWeight: 14000, predictionWeight: 32000, noise: 0.14, topN: 15 };
+    if (totalGames < 8) {
+        const t = (totalGames - 5) / 3;
+        return {
+            depth: 1 + Math.round(t),
+            adaptiveWeight: Math.round(9000 + t * 17000),
+            predictionWeight: Math.round(18000 + t * 34000),
+            noise: Math.max(0.03, 0.18 - t * 0.13),
+            topN: 12 + Math.round(t * 4)
+        };
     }
-    return { depth: 2, adaptiveWeight: 22000, predictionWeight: 46000, noise: 0.04, topN: 18 };
+    return { depth: 2, adaptiveWeight: 26000, predictionWeight: 52000, noise: 0.02, topN: 18 };
 }
 
 function sampleBySoftmax(rankedMoves, temperature) {
@@ -104,6 +103,37 @@ function getSoftmaxRanked(rankedMoves, temperature) {
     const exps = rankedMoves.map(m => Math.exp((m.score - maxScore) / (Math.abs(maxScore) * 0.05 + t * 10000)));
     const sum = exps.reduce((a, b) => a + b, 0) || 1;
     return rankedMoves.map((m, i) => ({ ...m, prob: exps[i] / sum }));
+}
+
+async function getBotCandidateHeatmap(b) {
+    let cans = getCandidates(b);
+    if (!cans.length) return [];
+    const profile = getDifficultyProfile(stats.total);
+    let scored = [];
+
+    for (let idx of cans) {
+        b[idx] = 2;
+        const rawScore = evaluateBoard(b, 2);
+        b[idx] = 0;
+        scored.push({ idx, rawScore });
+    }
+
+    scored.sort((a, b) => b.rawScore - a.rawScore);
+    scored = scored.slice(0, profile.topN);
+
+    const topIndices = scored.map(c => c.idx);
+    const mods = await getAdaptiveModifiersForCandidates(b, topIndices);
+    const predictionMap = getUserPredictionMap(b);
+    const ranked = scored.map((item, i) => {
+        const predictionScore = predictionMap[item.idx] || 0;
+        const blended = item.rawScore + (mods[i] * profile.adaptiveWeight) + (predictionScore * profile.predictionWeight);
+        return { idx: item.idx, score: blended };
+    }).sort((a, b) => b.score - a.score);
+
+    const withProb = getSoftmaxRanked(ranked, Math.max(0.02, profile.noise));
+    const map = {};
+    withProb.forEach(item => { map[item.idx] = item.prob; });
+    return map;
 }
 
 // ==========================================
@@ -414,6 +444,12 @@ async function getAdaptiveModifiersForCandidates(b, candidateIndices, player = 2
     });
 }
 
+function buildProbabilityHeatmapFromMap(scoreMap, maxValue = 1) {
+    return Object.entries(scoreMap).map(([idx, score]) => ({ idx: Number(idx), score: clamp(Number(score) / maxValue, 0, 1) }));
+}
+
+function clearDecisionTelemetry() {}
+
 // ==========================================
 // 인터랙션
 // ==========================================
@@ -474,13 +510,8 @@ async function userMove(x, y) {
 }
 
 async function botMove() {
-    const thinkingMsgs = [
-        `어디가 좋을지 잠시 수읽기 중입니다... 🤔`,
-        `음, 신중하게 포석을 구상하고 있어요. 🧐`,
-        `당신의 다음 수를 예측해 보는 중이에요. 💭`
-    ];
-    pushLog(thinkingMsgs[Math.floor(Math.random()*thinkingMsgs.length)], 'bot-sys');
-    await sleep(800);
+    pushLog(`수읽기 중...`, 'bot-sys');
+    await sleep(500);
 
     const profile = getDifficultyProfile(stats.total);
     let cans = getCandidates(board);
@@ -500,8 +531,7 @@ async function botMove() {
     scoredCans.sort((a,b) => b.rawScore - a.rawScore);
     let topCans = scoredCans.slice(0, profile.topN);
     
-    pushLog(`수읽기 + 사용자 다음 수 예측을 동시에 돌려서 함정과 반복 패턴을 함께 점검합니다. 👁️`, 'bot-think');
-    await sleep(800);
+    await sleep(300);
 
     // 2단계: 진행도에 따라 깊이를 올리는 Minimax
     for(let i=0; i<topCans.length; i++) {
@@ -513,12 +543,7 @@ async function botMove() {
     // 수읽기 결과로 다시 정렬 (수읽기로 발견한 치명적 함정 픽은 점수가 나락으로 감)
     topCans.sort((a,b) => b.rawScore - a.rawScore);
 
-    if (stats.total > 0) {
-        pushLog(`수읽기 완료! 이제 오답 노트를 꺼내 미세한 패턴 보정(신경망)을 거칩니다. 🧠`, 'bot-think');
-    } else {
-        pushLog(`수읽기 완료! 아직 학습 데이터는 없지만 제 얕은 직감을 보태볼게요. 🧠`, 'bot-think');
-    }
-    await sleep(800);
+    await sleep(200);
 
     // 3단계: 상위 후보들에 대해 신경망(Layer 2) + 사용자 예측 가중치 결합
     let topIndices = topCans.map(c => c.idx);
@@ -567,49 +592,15 @@ async function botMove() {
         best = sampleBySoftmax(rankedWithProb.slice(0, Math.min(6, rankedWithProb.length)), profile.noise);
     }
 
-    const selected = rankedWithProb.find(r => r.idx === best) || rankedWithProb[0];
-    const compSum = Math.abs(selected?.rawScore || 0) + Math.abs(selected?.adaptiveContribution || 0) + Math.abs(selected?.predictionContribution || 0) || 1;
-    const heuristicPct = Math.round(Math.abs(selected?.rawScore || 0) / compSum * 100);
-    const adaptivePct = Math.round(Math.abs(selected?.adaptiveContribution || 0) / compSum * 100);
-    const predictionPct = Math.max(0, 100 - heuristicPct - adaptivePct);
-
-    const predEntries = Object.entries(userPredictionMap)
-        .map(([idx, s]) => ({ idx: Number(idx), score: Number(s) || 0 }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 3);
-    const predSum = predEntries.reduce((acc, it) => acc + Math.max(0, it.score), 0) || 1;
-
-    lastDecisionTelemetry = {
-        heuristicPct,
-        adaptivePct,
-        predictionPct,
-        selectedProb: selected?.prob || 0,
-        botTop3: rankedWithProb.slice(0, 3).map(r => ({ idx: r.idx, prob: r.prob })),
-        userTop3: predEntries.map(p => ({ idx: p.idx, prob: Math.max(0, p.score) / predSum }))
-    };
-
-    pushLog(`결정 근거 비중: 수읽기 ${heuristicPct}% | 학습망 ${adaptivePct}% | 유저예측 ${predictionPct}%`, 'bot-sys');
-
-    if (lastDecisionTelemetry.userTop3.length > 0) {
-        const top = lastDecisionTelemetry.userTop3
-            .map(p => `(${p.idx % SIZE}, ${Math.floor(p.idx / SIZE)}) ${Math.round(p.prob * 100)}%`)
-            .join(' · ');
-        pushLog(`다음 당신의 수 예측 Top3: ${top}`, 'bot-think');
-    }
+    clearDecisionTelemetry();
     
     if (best !== originalBest) {
-        if (stats.total > 0) {
-            pushLog(`예측 엔진이 당신의 다음 수를 읽어내서 기존 착수를 방어형으로 수정했습니다. 😱`, 'bot-nn');
-        } else {
-            pushLog(`초기 학습 단계라 실험적 착수를 섞고 있습니다. 곧 더 까다로워집니다. 🧐`, 'bot-nn');
-        }
-        await sleep(800);
-        pushLog(`수읽기 대신 직감을 믿고 (${best%SIZE}, ${Math.floor(best/SIZE)}) 위치에 착수합니다. ✨`, 'bot-act');
+        pushLog(`착수 위치를 수정했습니다.`, 'bot-nn');
     } else {
-        pushLog(`논리적 수읽기 엔진과 신경망 직감이 일치합니다! (${best%SIZE}, ${Math.floor(best/SIZE)})에 착수! 😊`, 'bot-act');
+        pushLog(`(${best%SIZE}, ${Math.floor(best/SIZE)})`, 'bot-act');
     }
 
-    await sleep(600);
+    await sleep(200);
 
     if(best !== -1) {
         makeMove(best % SIZE, Math.floor(best / SIZE), 2);
@@ -711,26 +702,16 @@ async function endGame(res) {
     
     document.getElementById('modal-overlay').style.display = 'flex';
     document.getElementById('modal-title').innerText = res === 'won' ? "당신의 승리!" : (res === 'lost' ? "봇의 승리!" : "무승부!");
-    document.getElementById('modal-body').innerText = "기록을 분석하여 신경망을 미세 조정하고 있습니다...";
+    document.getElementById('modal-body').innerText = "기록을 저장하고 학습합니다.";
     
     if(res === 'won') {
-        const loseMsgs = [
-            `아앗... 제가 지다니요 😭 확실히 복기해서 다음엔 안 당할 거예요! 📝`,
-            `훌륭한 수였습니다! 제 빈틈을 정확히 파고드셨네요. 다음엔 다를 겁니다! 🔥`,
-            `패배를 인정합니다. 하지만 이 패배는 제 신경망의 훌륭한 거름이 될 거예요! 🌱`
-        ];
-        pushLog(loseMsgs[Math.floor(Math.random()*loseMsgs.length)], 'bot-warn');
+        pushLog(`패배를 학습했습니다.`, 'bot-warn');
     } else if(res === 'lost') {
-        const winMsgs = [
-            `제가 이겼네요! 그동안 학습한 패턴 방어 데이터가 효과를 톡톡히 봤습니다 🚀`,
-            `후후, 제 계산대로 흘러갔군요! 이 승리 패턴은 더 강하게 기억될 겁니다. 😎`,
-            `오목봇의 승리입니다! 당신의 패턴을 거의 다 파악한 것 같네요. 🤖`
-        ];
-        pushLog(winMsgs[Math.floor(Math.random()*winMsgs.length)], 'bot-act');
+        pushLog(`승리했습니다.`, 'bot-act');
     } else {
-        pushLog(`치열한 접전 끝에 무승부군요! 다음엔 꼭 결판을 내요. 🤝`, 'bot-act');
+        pushLog(`무승부입니다.`, 'bot-act');
     }
-    pushLog(`이번 대국의 기보를 바탕으로 가중치를 재조정하고 있습니다... 🛠️`, 'bot-nn');
+    pushLog(`학습 저장 중...`, 'bot-nn');
 
     const reward = res === 'lost' ? 1 : (res === 'won' ? -1 : 0);
     let xsData = [], ysData = [];
@@ -780,7 +761,7 @@ async function endGame(res) {
             let fLoss = h.history.loss[0];
             lossHistory.push(fLoss); 
             localStorage.setItem('gomoku-loss-history', JSON.stringify(lossHistory.slice(-200)));
-            pushLog(`CNN 8방향 시각 인지 학습 완료! (오차: ${fLoss.toFixed(4)}) 다음엔 각도를 비틀어도 안 속아요 😎`, 'bot-sys');
+            pushLog(`Loss ${fLoss.toFixed(4)}`, 'bot-sys');
         } catch(e) {} finally { xs.dispose(); ys.dispose(); }
     }
     
@@ -842,7 +823,7 @@ async function recalculateHeatmap() {
         for(let i=0; i<emptyIdxs.length; i++) {
             cells.push({idx: emptyIdxs[i], score: mods[i]}); 
         }
-    } else {
+    } else if (viewMode === 2) {
         const predictionMap = getUserPredictionMap(board);
         let maxPred = 0.001;
         Object.values(predictionMap).forEach(v => { maxPred = Math.max(maxPred, Number(v) || 0); });
@@ -854,6 +835,15 @@ async function recalculateHeatmap() {
             board[idx] = 0;
             const blunderRisk = clamp((-userEval) / 200000, 0, 1);
             cells.push({ idx, score: clamp(p - blunderRisk * 0.8, -1, 1) });
+        }
+    } else {
+        const botMap = await getBotCandidateHeatmap(board);
+        let maxProb = 0.001;
+        Object.values(botMap).forEach(v => { maxProb = Math.max(maxProb, Number(v) || 0); });
+        for (let i = 0; i < emptyIdxs.length; i++) {
+            const idx = emptyIdxs[i];
+            const p = (botMap[idx] || 0) / maxProb;
+            cells.push({ idx, score: clamp(p, 0, 1) });
         }
     }
 
@@ -872,29 +862,34 @@ function renderHeatmap() {
         if(c.score > 0) { sumPos += c.score; countPos++; }
         else if(c.score < 0) { sumNeg += Math.abs(c.score); countNeg++; }
     });
-    // 시각적 피로도를 줄이기 위해 가중치 평균을 내서 평균 이상인 것만 보여줌. (최소 0.15 임계치 사용)
     let avgPos = countPos ? Math.max(sumPos / countPos, 0.15) : 0;
     let avgNeg = countNeg ? Math.max(sumNeg / countNeg, 0.15) : 0;
 
     cells.forEach((c) => {
         let {idx: i, score: s} = c;
-        if(s > 0 && s < avgPos) return; // 양수 중 평균 이하 숨김
-        if(s < 0 && Math.abs(s) < avgNeg) return; // 음수 중 평균 절대치 이하 숨김
-        if(Math.abs(s) < 0.1) return; // 유의미도 낮음
+        if(viewMode === 3) {
+            if(s < 0.04) return;
+        } else {
+            if(s > 0 && s < avgPos) return;
+            if(s < 0 && Math.abs(s) < avgNeg) return;
+            if(Math.abs(s) < 0.1) return;
+        }
         
         const x = PAD + (i%SIZE)*CELL, y = PAD + Math.floor(i/SIZE)*CELL;
         
         if (viewMode === 1) {
             if (s > 0) ctx.fillStyle = `rgba(16, 185, 129, ${s * 0.8})`; 
             else ctx.fillStyle = `rgba(168, 85, 247, ${Math.abs(s) * 0.8})`; 
-        } else {
+        } else if (viewMode === 2) {
             if (s > 0) ctx.fillStyle = `rgba(239, 68, 68, ${s * 0.8})`; 
             else ctx.fillStyle = `rgba(59, 130, 246, ${Math.abs(s) * 0.8})`; 
+        } else {
+            ctx.fillStyle = `rgba(239, 68, 68, ${0.18 + s * 0.82})`;
         }
         
         ctx.fillRect(x+1, y+1, CELL-2, CELL-2);
         
-        if(Math.abs(s) > 0.3) {
+        if((viewMode === 3 && s > 0.12) || (viewMode !== 3 && Math.abs(s) > 0.3)) {
             ctx.fillStyle = 'white';
             ctx.font = '10px Inter';
             ctx.textAlign = 'center';
@@ -913,50 +908,7 @@ function updateUI() {
     const p = winProbTrace[winProbTrace.length-1] || 0.5;
     document.getElementById('prob-user').style.width = (1-p)*100 + '%'; document.getElementById('prob-user').innerText = `당신 ${Math.round((1-p)*100)}%`;
     document.getElementById('prob-bot').innerText = `봇 ${Math.round(p*100)}%`;
-    renderDecisionPanel();
     renderCharts();
-}
-
-function renderDecisionPanel() {
-    const h = document.getElementById('mix-heuristic');
-    const a = document.getElementById('mix-adaptive');
-    const p = document.getElementById('mix-prediction');
-    const cp = document.getElementById('mix-choice-prob');
-    const sig = document.getElementById('analysis-signal');
-    const userTop = document.getElementById('user-top3');
-    const botTop = document.getElementById('bot-top3');
-
-    if (!h || !a || !p || !cp || !sig || !userTop || !botTop) return;
-
-    h.innerText = `${lastDecisionTelemetry.heuristicPct || 0}%`;
-    a.innerText = `${lastDecisionTelemetry.adaptivePct || 0}%`;
-    p.innerText = `${lastDecisionTelemetry.predictionPct || 0}%`;
-    cp.innerText = `${Math.round((lastDecisionTelemetry.selectedProb || 0) * 100)}%`;
-
-    const analyzed = playerModel.gamesAnalyzed || 0;
-    const transitions = Object.keys(playerModel.transition || {}).length;
-    const threatSignals = Object.keys(playerModel.threatCells || {}).length;
-    sig.innerText = `분석 근거: 학습 반영 ${analyzed}판, 전이패턴 ${transitions}개, 위협좌표 ${threatSignals}개`;
-
-    if ((lastDecisionTelemetry.userTop3 || []).length === 0) {
-        userTop.innerText = '예측 데이터 준비 중...';
-    } else {
-        userTop.innerHTML = lastDecisionTelemetry.userTop3.map((m, i) => {
-            const x = m.idx % SIZE;
-            const y = Math.floor(m.idx / SIZE);
-            return `${i + 1}) (${x}, ${y}) - ${Math.round(m.prob * 100)}%`;
-        }).join('<br>');
-    }
-
-    if ((lastDecisionTelemetry.botTop3 || []).length === 0) {
-        botTop.innerText = '후보 평가 준비 중...';
-    } else {
-        botTop.innerHTML = lastDecisionTelemetry.botTop3.map((m, i) => {
-            const x = m.idx % SIZE;
-            const y = Math.floor(m.idx / SIZE);
-            return `${i + 1}) (${x}, ${y}) - ${Math.round(m.prob * 100)}%`;
-        }).join('<br>');
-    }
 }
 
 function renderCharts() {
@@ -1075,7 +1027,7 @@ if(document.getElementById('btn-view-board')) {
     };
 }
 document.getElementById('btn-toggle-heatmap').onclick = () => { 
-    viewMode = (viewMode + 1) % 3;
+    viewMode = (viewMode + 1) % 4;
     document.getElementById('btn-toggle-heatmap').innerText = VIEW_MODES[viewMode]; 
     document.getElementById('heatmap-legend').style.display = viewMode > 0 ? 'block' : 'none';
     
@@ -1095,6 +1047,14 @@ document.getElementById('btn-toggle-heatmap').onclick = () => {
         document.getElementById('legend-neg-color').style.color = '#3b82f6';
         document.getElementById('legend-neg-color').innerText = "● 파란색(-)";
         document.getElementById('legend-neg-text').innerText = ": 사용자가 둘 확률은 있으나 즉시 악수로 분류된 자리";
+    } else if (viewMode === 3) {
+        document.getElementById('legend-title').innerText = "봇 후보 확률 맵 (실계산)";
+        document.getElementById('legend-pos-color').style.color = '#ef4444';
+        document.getElementById('legend-pos-color').innerText = "● 빨간색(+)")
+        document.getElementById('legend-pos-text').innerText = ": 봇이 실제로 둘 확률이 높은 후보";
+        document.getElementById('legend-neg-color').style.color = '#f59e0b';
+        document.getElementById('legend-neg-color').innerText = "● 주황색(-)";
+        document.getElementById('legend-neg-text').innerText = ": 상대적으로 낮은 확률의 후보";
     }
 
     recalculateHeatmap(); 
@@ -1104,15 +1064,16 @@ document.getElementById('btn-reset').onclick = () => {
     if(confirm("모든 기억과 승률 데이터를 지우시겠습니까?")) {
         localStorage.clear();
         playerModel = createDefaultPlayerModel();
-        lastDecisionTelemetry = {
-            heuristicPct: 0,
-            adaptivePct: 0,
-            predictionPct: 0,
-            selectedProb: 0,
-            botTop3: [],
-            userTop3: []
-        };
-        location.reload();
+        clearDecisionTelemetry();
+        board = Array(SIZE * SIZE).fill(0);
+        gameHistory = [];
+        winProbTrace = [0.5];
+        lastUserMoveIdx = null;
+        isThinking = true;
+        document.getElementById('startup-overlay').style.display = 'flex';
+        recalculateHeatmap();
+        renderBoard();
+        updateUI();
     }
 };
 document.getElementById('btn-export').onclick = () => { exportMemory(); };
