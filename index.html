@@ -14,6 +14,10 @@
     <div class="modal-card">
         <h2 style="margin-bottom: 5px; font-size: 2rem;">오목봇🤖</h2>
         <p style="color: var(--text-secondary); margin-bottom: 2rem;">강화학습 기반 오목 플레이 프로젝트</p>
+        <div id="startup-status" class="startup-status" aria-live="polite">
+            <span class="startup-spinner" aria-hidden="true"></span>
+            <span id="startup-status-text">모델을 불러오는 중입니다.</span>
+        </div>
         <div style="display: flex; flex-direction: column; gap: 10px;">
             <button class="btn-secondary" id="btn-start-load" style="margin-top:0;">이어 하기</button>
             <button class="btn-primary" id="btn-start-new">게임 시작</button>

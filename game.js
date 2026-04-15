@@ -11,6 +11,7 @@ let stats = JSON.parse(localStorage.getItem('gomoku-stats')) || { won: 0, lost: 
 let lossHistory = JSON.parse(localStorage.getItem('gomoku-loss-history')) || [];
 let winProbHistory = JSON.parse(localStorage.getItem('gomoku-winprob-history')) || [];
 let viewMode = 0, isThinking = false, model = null, modelReady = false;
+let modelLoadToken = 0;
 const VIEW_MODES = ['시각화: 끄기', 'AI 뇌구조 맵 보기', '유저 수 예측 보기', '봇 후보 확률 보기'];
 let hoverPos = null; 
 let lastUserMoveIdx = null;
@@ -49,6 +50,14 @@ function savePlayerModel() {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+function setStartupStatus(text, isReady = false) {
+    const status = document.getElementById('startup-status');
+    const statusText = document.getElementById('startup-status-text');
+    if (!status || !statusText) return;
+    statusText.textContent = text;
+    status.classList.toggle('is-ready', isReady);
+}
+
 function pushLog(msg, type='bot-sys') {
     const c = document.getElementById('ai-console');
     const d = document.createElement('div');
@@ -56,6 +65,20 @@ function pushLog(msg, type='bot-sys') {
     d.innerHTML = msg;
     c.appendChild(d);
     c.scrollTop = c.scrollHeight;
+}
+
+function createAdaptiveModel() {
+    const adaptiveModel = tf.sequential({ layers: [
+        tf.layers.reshape({ targetShape: [15, 15, 1], inputShape: [225] }),
+        tf.layers.conv2d({ filters: 32, kernelSize: 5, padding: 'same', activation: 'relu' }),
+        tf.layers.conv2d({ filters: 64, kernelSize: 3, padding: 'same', activation: 'relu' }),
+        tf.layers.flatten(),
+        tf.layers.dense({ units: 64, activation: 'relu' }),
+        tf.layers.dropout({ rate: 0.2 }),
+        tf.layers.dense({ units: 1, activation: 'tanh' })
+    ]});
+    adaptiveModel.compile({ optimizer: tf.train.adam(stats.total < 5 ? 0.005 : 0.001), loss: 'meanSquaredError' });
+    return adaptiveModel;
 }
 
 const canvas = document.getElementById('board-canvas'), ctx = canvas.getContext('2d');
@@ -146,24 +169,24 @@ async function getBotCandidateHeatmap(b) {
 // 모델 초기화
 // ==========================================
 async function initModel() {
-    try {
-        model = await tf.loadLayersModel('localstorage://gomoku-adaptive-weights');
-        // 신규 CNN 구조 여부를 확인하여, 예전 모델이면 에러를 던져 초기화 유도
-        if (model.inputs[0].shape[1] !== 225) throw new Error("Old model architecture");
-    } catch (e) {
-        model = tf.sequential({ layers: [
-            tf.layers.reshape({ targetShape: [15, 15, 1], inputShape: [225] }),
-            tf.layers.conv2d({ filters: 32, kernelSize: 5, padding: 'same', activation: 'relu' }),
-            tf.layers.conv2d({ filters: 64, kernelSize: 3, padding: 'same', activation: 'relu' }),
-            tf.layers.flatten(),
-            tf.layers.dense({ units: 64, activation: 'relu' }),
-            tf.layers.dropout({ rate: 0.2 }),
-            tf.layers.dense({ units: 1, activation: 'tanh' })
-        ]});
-        model.compile({ optimizer: tf.train.adam(stats.total < 5 ? 0.005 : 0.001), loss: 'meanSquaredError' });
-    }
+    const token = ++modelLoadToken;
+    model = createAdaptiveModel();
     modelReady = true;
+    setStartupStatus('기본 엔진으로 바로 시작할 수 있습니다. 이전 모델을 불러오는 중입니다.');
     updateUI();
+
+    try {
+        const loadedModel = await tf.loadLayersModel('localstorage://gomoku-adaptive-weights');
+        if (token !== modelLoadToken) return;
+        // 신규 CNN 구조 여부를 확인하여, 예전 모델이면 에러를 던져 초기화 유도
+        if (loadedModel.inputs[0].shape[1] !== 225) throw new Error("Old model architecture");
+        model = loadedModel;
+        setStartupStatus('이전 모델까지 불러왔습니다.');
+        updateUI();
+    } catch (e) {
+        if (token !== modelLoadToken) return;
+        setStartupStatus('기본 엔진으로 실행 중입니다. 저장된 모델은 아직 불러오지 못했습니다.', true);
+    }
 }
 
 // ==========================================
@@ -460,7 +483,7 @@ function clearDecisionTelemetry() {}
 // 인터랙션
 // ==========================================
 canvas.addEventListener('click', e => {
-    if(isThinking || !modelReady) return;
+    if(isThinking) return;
     const rect = canvas.getBoundingClientRect();
     
     // 반응형 스케일 대응! canvas 내부 해상도 대비 현재 DOM 렌더 사이즈 비율
@@ -474,7 +497,7 @@ canvas.addEventListener('click', e => {
 });
 
 canvas.addEventListener('mousemove', e => {
-    if(isThinking || !modelReady) return;
+    if(isThinking) return;
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
@@ -1096,9 +1119,11 @@ document.querySelectorAll('.section-title').forEach(title => {
 
 // 스타트업 모달 이벤트
 document.getElementById('btn-start-new').addEventListener('click', () => {
-    if(!modelReady) { alert('AI 모델을 불러오는 중입니다. 잠시만 기다려주세요!'); return; }
     document.getElementById('startup-overlay').style.display = 'none';
     isThinking = false; 
+    if (!modelReady) {
+        pushLog('모델을 불러오는 중입니다. 준비되면 바로 시작할 수 있습니다.', 'bot-sys');
+    }
 });
 document.getElementById('btn-start-load').addEventListener('click', () => {
     document.getElementById('import-file').click();
@@ -1106,6 +1131,7 @@ document.getElementById('btn-start-load').addEventListener('click', () => {
 
 // 최초 실행 및 초기 상태
 isThinking = true; // 모달을 닫기 전까지는 착수 제한
+setStartupStatus('모델을 불러오는 중입니다. 잠시만 기다려 주세요.');
 initModel(); recalculateHeatmap(); renderBoard();
 window.addEventListener('resize', () => {
     renderBoard();
