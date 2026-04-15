@@ -199,6 +199,12 @@ canvas {
     border-color: rgba(16, 185, 129, 0.22);
 }
 
+.startup-status.is-ready .startup-spinner {
+    animation: none;
+    border-color: rgba(4, 120, 87, 0.35);
+    border-top-color: rgba(4, 120, 87, 0.35);
+}
+
 .startup-spinner {
     width: 14px;
     height: 14px;

@@ -176,15 +176,28 @@ async function initModel() {
     updateUI();
 
     try {
-        const loadedModel = await tf.loadLayersModel('localstorage://gomoku-adaptive-weights');
+        const loadedModel = await Promise.race([
+            tf.loadLayersModel('localstorage://gomoku-adaptive-weights'),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Model load timeout')), 8000))
+        ]);
         if (token !== modelLoadToken) return;
         // 신규 CNN 구조 여부를 확인하여, 예전 모델이면 에러를 던져 초기화 유도
         if (loadedModel.inputs[0].shape[1] !== 225) throw new Error("Old model architecture");
         model = loadedModel;
-        setStartupStatus('이전 모델까지 불러왔습니다.');
+        setStartupStatus('이전 모델까지 불러왔습니다.', true);
         updateUI();
     } catch (e) {
         if (token !== modelLoadToken) return;
+        if (e && typeof e.message === 'string' && e.message.includes('timeout')) {
+            const staleKeys = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('tensorflowjs_models/gomoku-adaptive-weights/')) {
+                    staleKeys.push(key);
+                }
+            }
+            staleKeys.forEach(k => localStorage.removeItem(k));
+        }
         setStartupStatus('기본 엔진으로 실행 중입니다. 저장된 모델은 아직 불러오지 못했습니다.', true);
     }
 }
