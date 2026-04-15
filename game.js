@@ -52,12 +52,17 @@ function savePlayerModel() {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function setStartupStatus(text, isReady = false) {
+function setStartupStatus(text, isReady = false, note = '') {
     const status = document.getElementById('startup-status');
     const statusText = document.getElementById('startup-status-text');
+    const statusNote = document.getElementById('startup-status-note');
     if (!status || !statusText) return;
     statusText.textContent = text;
     status.classList.toggle('is-ready', isReady);
+    if (statusNote) {
+        statusNote.textContent = note;
+        statusNote.style.display = note ? 'block' : 'none';
+    }
 }
 
 function hasSavedAdaptiveModel() {
@@ -183,12 +188,20 @@ async function initModel() {
     model = createAdaptiveModel();
     modelReady = true;
     if (!hasSavedAdaptiveModel()) {
-        setStartupStatus('기본 엔진으로 바로 시작할 수 있습니다. 아직 저장된 학습 모델은 없습니다.', true);
+        setStartupStatus(
+            '준비 완료',
+            true,
+            '첫 플레이는 기본 설정으로 시작됩니다. 대국 결과는 자동으로 학습되어 다음 판부터 반영됩니다.'
+        );
         updateUI();
         return;
     }
 
-    setStartupStatus('기본 엔진으로 바로 시작할 수 있습니다. 이전 학습 모델을 불러오는 중입니다.');
+    setStartupStatus(
+        '준비 완료',
+        true,
+        '게임은 바로 시작할 수 있습니다. 이전 학습 데이터를 백그라운드에서 적용하고 있습니다.'
+    );
     updateUI();
 
     try {
@@ -200,7 +213,7 @@ async function initModel() {
         // 신규 CNN 구조 여부를 확인하여, 예전 모델이면 에러를 던져 초기화 유도
         if (loadedModel.inputs[0].shape[1] !== 225) throw new Error("Old model architecture");
         model = loadedModel;
-        setStartupStatus('이전 학습 모델까지 불러왔습니다.', true);
+        setStartupStatus('준비 완료', true, '이전 학습 데이터를 적용했습니다. 이어서 플레이할 수 있습니다.');
         updateUI();
     } catch (e) {
         if (token !== modelLoadToken) return;
@@ -214,7 +227,11 @@ async function initModel() {
             }
             staleKeys.forEach(k => localStorage.removeItem(k));
         }
-        setStartupStatus('기본 엔진으로 실행 중입니다. 저장된 학습 모델을 불러오지 못했습니다.', true);
+        setStartupStatus(
+            '준비 완료',
+            true,
+            '이전 학습 데이터는 적용하지 못했지만, 게임은 기본 설정으로 바로 시작할 수 있습니다.'
+        );
     }
 }
 
@@ -1151,7 +1168,7 @@ document.getElementById('btn-start-new').addEventListener('click', () => {
     document.getElementById('startup-overlay').style.display = 'none';
     isThinking = false; 
     if (!modelReady) {
-        pushLog('모델을 불러오는 중입니다. 준비되면 바로 시작할 수 있습니다.', 'bot-sys');
+        pushLog('게임 준비가 끝나는 대로 바로 시작할 수 있습니다.', 'bot-sys');
     }
 });
 document.getElementById('btn-start-load').addEventListener('click', () => {
@@ -1160,7 +1177,7 @@ document.getElementById('btn-start-load').addEventListener('click', () => {
 
 // 최초 실행 및 초기 상태
 isThinking = true; // 모달을 닫기 전까지는 착수 제한
-setStartupStatus('게임 엔진을 준비 중입니다. 잠시만 기다려 주세요.');
+setStartupStatus('게임 환경 확인 중', false, '엔진과 저장된 데이터를 확인하고 있습니다.');
 initModel(); recalculateHeatmap(); renderBoard();
 window.addEventListener('resize', () => {
     renderBoard();
