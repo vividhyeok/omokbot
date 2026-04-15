@@ -12,7 +12,7 @@ let lossHistory = JSON.parse(localStorage.getItem('gomoku-loss-history')) || [];
 let winProbHistory = JSON.parse(localStorage.getItem('gomoku-winprob-history')) || [];
 let viewMode = 0, isThinking = false, model = null, modelReady = false;
 let modelLoadToken = 0;
-const VIEW_MODES = ['시각화: 끄기', 'AI 뇌구조 맵 보기', '유저 수 예측 보기', '봇 후보 확률 보기'];
+const VIEW_MODES = ['확률 시각화: 끄기', '봇 우선 확률 보기', '사용자 다음 수 확률 보기', '봇 선택 확률 보기'];
 let hoverPos = null; 
 let lastUserMoveIdx = null;
 const STYLE_FIRST_MODE = true;
@@ -1070,8 +1070,22 @@ async function recalculateHeatmap() {
     let cells = [];
     if (viewMode === 1) {
         let mods = await getAdaptiveModifiersForCandidates(board, emptyIdxs, 2);
+        let minScore = Infinity;
+        let maxScore = -Infinity;
+        const rawScores = [];
         for(let i=0; i<emptyIdxs.length; i++) {
-            cells.push({idx: emptyIdxs[i], score: mods[i]}); 
+            const idx = emptyIdxs[i];
+            board[idx] = 2;
+            const boardScore = evaluateBoard(board, 2);
+            board[idx] = 0;
+            const score = (boardScore / PATTERNS.WIN) * 0.7 + Number(mods[i] || 0) * 0.3;
+            rawScores.push(score);
+            minScore = Math.min(minScore, score);
+            maxScore = Math.max(maxScore, score);
+        }
+        const span = Math.max(0.0001, maxScore - minScore);
+        for (let i = 0; i < emptyIdxs.length; i++) {
+            cells.push({ idx: emptyIdxs[i], score: clamp((rawScores[i] - minScore) / span, 0, 1) });
         }
     } else if (viewMode === 2) {
         const predictionMap = getUserPredictionMap(board);
@@ -1080,11 +1094,7 @@ async function recalculateHeatmap() {
         for (let i = 0; i < emptyIdxs.length; i++) {
             const idx = emptyIdxs[i];
             const p = (predictionMap[idx] || 0) / maxPred;
-            board[idx] = 1;
-            const userEval = evaluateBoard(board, 1);
-            board[idx] = 0;
-            const blunderRisk = clamp((-userEval) / 200000, 0, 1);
-            cells.push({ idx, score: clamp(p - blunderRisk * 0.8, -1, 1) });
+            cells.push({ idx, score: clamp(p, 0, 1) });
         }
     } else {
         const botMap = await getBotCandidateHeatmap(board);
@@ -1106,40 +1116,23 @@ function renderHeatmap() {
     if(!currentHeatmapData) return;
     let cells = currentHeatmapData;
 
-    let sumPos = 0, countPos = 0;
-    let sumNeg = 0, countNeg = 0;
-    cells.forEach(c => {
-        if(c.score > 0) { sumPos += c.score; countPos++; }
-        else if(c.score < 0) { sumNeg += Math.abs(c.score); countNeg++; }
-    });
-    let avgPos = countPos ? Math.max(sumPos / countPos, 0.15) : 0;
-    let avgNeg = countNeg ? Math.max(sumNeg / countNeg, 0.15) : 0;
-
     cells.forEach((c) => {
         let {idx: i, score: s} = c;
-        if(viewMode === 3) {
-            if(s < 0.04) return;
-        } else {
-            if(s > 0 && s < avgPos) return;
-            if(s < 0 && Math.abs(s) < avgNeg) return;
-            if(Math.abs(s) < 0.1) return;
-        }
+        if (s < 0.08) return;
         
         const x = PAD + (i%SIZE)*CELL, y = PAD + Math.floor(i/SIZE)*CELL;
         
         if (viewMode === 1) {
-            if (s > 0) ctx.fillStyle = `rgba(16, 185, 129, ${s * 0.8})`; 
-            else ctx.fillStyle = `rgba(168, 85, 247, ${Math.abs(s) * 0.8})`; 
+            ctx.fillStyle = `rgba(37, 99, 235, ${0.16 + s * 0.72})`;
         } else if (viewMode === 2) {
-            if (s > 0) ctx.fillStyle = `rgba(239, 68, 68, ${s * 0.8})`; 
-            else ctx.fillStyle = `rgba(59, 130, 246, ${Math.abs(s) * 0.8})`; 
+            ctx.fillStyle = `rgba(239, 68, 68, ${0.16 + s * 0.72})`;
         } else {
-            ctx.fillStyle = `rgba(239, 68, 68, ${0.18 + s * 0.82})`;
+            ctx.fillStyle = `rgba(16, 185, 129, ${0.16 + s * 0.72})`;
         }
         
         ctx.fillRect(x+1, y+1, CELL-2, CELL-2);
         
-        if((viewMode === 3 && s > 0.12) || (viewMode !== 3 && Math.abs(s) > 0.3)) {
+        if (s > 0.28) {
             ctx.fillStyle = 'white';
             ctx.font = '10px Inter';
             ctx.textAlign = 'center';
@@ -1282,29 +1275,29 @@ document.getElementById('btn-toggle-heatmap').onclick = () => {
     document.getElementById('heatmap-legend').style.display = viewMode > 0 ? 'block' : 'none';
     
     if (viewMode === 1) {
-        document.getElementById('legend-title').innerText = "AI 뇌파 분석 맵 (봇 관점)";
-        document.getElementById('legend-pos-color').style.color = '#10b981';
-        document.getElementById('legend-pos-color').innerText = "● 초록색(+)";
-        document.getElementById('legend-pos-text').innerText = ": AI가 전략적으로 유리하다고 보는 자리";
-        document.getElementById('legend-neg-color').style.color = '#a855f7';
-        document.getElementById('legend-neg-color').innerText = "● 보라색(-)";
-        document.getElementById('legend-neg-text').innerText = ": 과거 함정 경험으로 인해 회피하는 자리";
+        document.getElementById('legend-title').innerText = "봇 우선 확률 시각화";
+        document.getElementById('legend-pos-color').style.color = '#2563eb';
+        document.getElementById('legend-pos-color').innerText = "● 파란색";
+        document.getElementById('legend-pos-text').innerText = ": 봇이 우선적으로 검토하는 자리";
+        document.getElementById('legend-neg-color').style.color = '#64748b';
+        document.getElementById('legend-neg-color').innerText = "● 회색";
+        document.getElementById('legend-neg-text').innerText = ": 상대적으로 가능성이 낮은 자리";
     } else if (viewMode === 2) {
-        document.getElementById('legend-title').innerText = "사용자 수 확률 예측 맵 (실계산)";
+        document.getElementById('legend-title').innerText = "사용자 다음 수 확률 시각화";
         document.getElementById('legend-pos-color').style.color = '#ef4444';
-        document.getElementById('legend-pos-color').innerText = "● 빨간색(+)";
-        document.getElementById('legend-pos-text').innerText = ": 전이 패턴+위협도+국면을 합친 사용자 다음 수 확률이 높은 자리";
-        document.getElementById('legend-neg-color').style.color = '#3b82f6';
-        document.getElementById('legend-neg-color').innerText = "● 파란색(-)";
-        document.getElementById('legend-neg-text').innerText = ": 사용자가 둘 확률은 있으나 즉시 악수로 분류된 자리";
+        document.getElementById('legend-pos-color').innerText = "● 빨간색";
+        document.getElementById('legend-pos-text').innerText = ": 사용자가 다음에 둘 가능성이 높은 자리";
+        document.getElementById('legend-neg-color').style.color = '#94a3b8';
+        document.getElementById('legend-neg-color').innerText = "● 옅은 회색";
+        document.getElementById('legend-neg-text').innerText = ": 상대적으로 덜 선택될 자리";
     } else if (viewMode === 3) {
-        document.getElementById('legend-title').innerText = "봇 후보 확률 맵 (실계산)";
-        document.getElementById('legend-pos-color').style.color = '#ef4444';
-        document.getElementById('legend-pos-color').innerText = "● 빨간색(+)";
-        document.getElementById('legend-pos-text').innerText = ": 봇이 실제로 둘 확률이 높은 후보";
-        document.getElementById('legend-neg-color').style.color = '#f59e0b';
-        document.getElementById('legend-neg-color').innerText = "● 주황색(-)";
-        document.getElementById('legend-neg-text').innerText = ": 상대적으로 낮은 확률의 후보";
+        document.getElementById('legend-title').innerText = "봇 선택 확률 시각화";
+        document.getElementById('legend-pos-color').style.color = '#10b981';
+        document.getElementById('legend-pos-color').innerText = "● 초록색";
+        document.getElementById('legend-pos-text').innerText = ": 봇이 실제로 선택할 가능성이 높은 후보";
+        document.getElementById('legend-neg-color').style.color = '#94a3b8';
+        document.getElementById('legend-neg-color').innerText = "● 회색";
+        document.getElementById('legend-neg-text').innerText = ": 상대적으로 낮은 선택 확률의 후보";
     }
 
     recalculateHeatmap(); 
@@ -1312,6 +1305,7 @@ document.getElementById('btn-toggle-heatmap').onclick = () => {
 };
 document.getElementById('btn-reset').onclick = () => {
     if(confirm("모든 기억과 승률 데이터를 지우시겠습니까?")) {
+        modelLoadToken++;
         localStorage.clear();
         playerModel = createDefaultPlayerModel();
         clearDecisionTelemetry();
@@ -1319,8 +1313,11 @@ document.getElementById('btn-reset').onclick = () => {
         gameHistory = [];
         winProbTrace = [0.5];
         lastUserMoveIdx = null;
+        model = createAdaptiveModel();
+        modelReady = true;
         isThinking = true;
         document.getElementById('startup-overlay').style.display = 'flex';
+        setStartupStatus('게임 환경 확인 중', false, '기본 엔진을 다시 준비하고 있습니다.');
         recalculateHeatmap();
         renderBoard();
         updateUI();
