@@ -12,10 +12,30 @@ let lossHistory = JSON.parse(localStorage.getItem('gomoku-loss-history')) || [];
 let winProbHistory = JSON.parse(localStorage.getItem('gomoku-winprob-history')) || [];
 let viewMode = 0, isThinking = false, model = null, modelReady = false;
 let modelLoadToken = 0;
-const VIEW_MODES = ['확률 시각화: 끄기', '봇 우선 확률 보기', '사용자 다음 수 확률 보기', '봇 선택 확률 보기'];
+const VIEW_MODES = ['보드 색 보기: 끄기', '규칙상 좋은 자리 보기', '상대 예상 자리 보기', '봇 선택 보기', '경험상 좋은 자리 보기'];
 let hoverPos = null; 
 let lastUserMoveIdx = null;
 const STYLE_FIRST_MODE = true;
+const EXPERIMENT_SETTINGS_KEY = 'gomoku-experiment-settings';
+const LAST_LEARNING_SUMMARY_KEY = 'gomoku-last-learning-summary';
+const DEFAULT_EXPERIMENT_SETTINGS = {
+    preset: 'balanced',
+    adventure: 1,
+    tactics: 1,
+    memory: 1,
+    learningSpeed: 1,
+    learningEnabled: true
+};
+let experimentSettings = (() => {
+    const raw = JSON.parse(localStorage.getItem(EXPERIMENT_SETTINGS_KEY) || 'null');
+    return {
+        ...DEFAULT_EXPERIMENT_SETTINGS,
+        ...(raw && typeof raw === 'object' ? raw : {})
+    };
+})();
+let lastDecisionSummary = null;
+let lastLearningSummary = JSON.parse(localStorage.getItem(LAST_LEARNING_SUMMARY_KEY) || 'null');
+let isReviewingGame = false;
 
 const PLAYER_MODEL_KEY = 'gomoku-player-model';
 const createDefaultPlayerModel = () => ({
@@ -61,6 +81,10 @@ function savePlayerModel() {
     localStorage.setItem(PLAYER_MODEL_KEY, JSON.stringify(playerModel));
 }
 
+function saveExperimentSettings() {
+    localStorage.setItem(EXPERIMENT_SETTINGS_KEY, JSON.stringify(experimentSettings));
+}
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function setStartupStatus(text, isReady = false, note = '') {
@@ -94,6 +118,7 @@ function pushLog(msg, type='bot-sys') {
 }
 
 function createAdaptiveModel() {
+    const speed = clamp(Number(experimentSettings.learningSpeed) || 1, 0.5, 1.5);
     const adaptiveModel = tf.sequential({ layers: [
         tf.layers.reshape({ targetShape: [15, 15, 1], inputShape: [225] }),
         tf.layers.conv2d({ filters: 32, kernelSize: 5, padding: 'same', activation: 'relu' }),
@@ -103,7 +128,7 @@ function createAdaptiveModel() {
         tf.layers.dropout({ rate: 0.2 }),
         tf.layers.dense({ units: 1, activation: 'tanh' })
     ]});
-    adaptiveModel.compile({ optimizer: tf.train.adam(stats.total < 5 ? 0.005 : 0.001), loss: 'meanSquaredError' });
+    adaptiveModel.compile({ optimizer: tf.train.adam((stats.total < 5 ? 0.005 : 0.001) * speed), loss: 'meanSquaredError' });
     return adaptiveModel;
 }
 
@@ -192,6 +217,26 @@ function getDifficultyProfile(totalGames) {
     };
 }
 
+function getEffectiveDifficultyProfile(totalGames) {
+    const base = getDifficultyProfile(totalGames);
+    const adventure = clamp(Number(experimentSettings.adventure) || 0, 0, 2);
+    const tactics = clamp(Number(experimentSettings.tactics) || 0, 0, 2);
+    const memory = clamp(Number(experimentSettings.memory) || 0, 0, 2);
+    const learningSpeed = clamp(Number(experimentSettings.learningSpeed) || 1, 0.5, 1.5);
+
+    return {
+        ...base,
+        noise: clamp(base.noise * (0.55 + adventure * 0.7), 0.01, 1.6),
+        pickTop: Math.max(1, Math.round(base.pickTop + (adventure - 1) * 3)),
+        secondTierChance: clamp(base.secondTierChance * (0.45 + adventure * 0.8), 0, 0.9),
+        rawScoreWeight: base.rawScoreWeight * (0.45 + tactics * 0.75),
+        predictionWeight: base.predictionWeight * (0.2 + memory * 0.9),
+        adaptiveWeight: base.adaptiveWeight * (0.45 + learningSpeed * 0.7),
+        forcedBlockPenalty: base.forcedBlockPenalty * (0.85 + tactics * 0.25),
+        userImmediatePenalty: base.userImmediatePenalty * (0.75 + tactics * 0.35)
+    };
+}
+
 function sampleBySoftmax(rankedMoves, temperature) {
     if (!rankedMoves.length) return -1;
     const t = Math.max(0.01, temperature);
@@ -241,7 +286,7 @@ function chooseMoveFromRanked(rankedMoves, profile) {
 async function getBotCandidateHeatmap(b) {
     let cans = getCandidates(b);
     if (!cans.length) return [];
-    const profile = getDifficultyProfile(stats.total);
+    const profile = getEffectiveDifficultyProfile(stats.total);
     let scored = [];
 
     for (let idx of cans) {
@@ -623,6 +668,11 @@ function getUserPredictionMap(b) {
 
 function updatePlayerModelAfterUserMove(x, y) {
     const idx = y * SIZE + x;
+    if (!experimentSettings.learningEnabled) {
+        lastUserMoveIdx = idx;
+        return;
+    }
+
     const userMoveNumber = getCurrentUserMoveCount();
     playerModel.moveCount[idx] = (playerModel.moveCount[idx] || 0) + 1;
     if (userMoveNumber <= 3) {
@@ -675,21 +725,69 @@ function buildProbabilityHeatmapFromMap(scoreMap, maxValue = 1) {
     return Object.entries(scoreMap).map(([idx, score]) => ({ idx: Number(idx), score: clamp(Number(score) / maxValue, 0, 1) }));
 }
 
-function clearDecisionTelemetry() {}
+function formatCoord(idx) {
+    return window.OmokEducation.formatCoord(idx, SIZE);
+}
+
+function clearDecisionTelemetry() {
+    lastDecisionSummary = null;
+    window.OmokEducation.renderDecisionPanel(null);
+}
+
+function recordDecisionTelemetry(rankedMoves, selectedIdx, context = {}) {
+    lastDecisionSummary = window.OmokEducation.buildDecisionSummary(rankedMoves, selectedIdx, context, SIZE);
+    if (!lastDecisionSummary) {
+        clearDecisionTelemetry();
+        return;
+    }
+    window.OmokEducation.renderDecisionPanel(lastDecisionSummary);
+}
+
+function updateLearningPanel() {
+    window.OmokEducation.updateLearningPanel({
+        size: SIZE,
+        experimentSettings,
+        isThinking,
+        isReviewing: isReviewingGame,
+        gameHistory,
+        playerModel,
+        confidence: getPlayerStyleConfidence(),
+        lastLearningSummary
+    });
+}
+
+function updateMemoryPanel() {
+    window.OmokEducation.updateMemoryPanel({ size: SIZE, playerModel });
+}
+
+function renderModalLearningSummary() {
+    window.OmokEducation.renderModalLearningSummary(lastLearningSummary);
+}
+
+function initExperimentControls() {
+    window.OmokEducation.initExperimentControls({
+        settings: experimentSettings,
+        onChange: () => {
+            saveExperimentSettings();
+            recalculateHeatmap();
+            updateUI();
+        }
+    });
+}
 
 function updateVisualizationLegend() {
     if (viewMode === 0) return;
 
     if (viewMode === 1) {
-        document.getElementById('legend-title').innerText = "봇 우선 확률 시각화";
+        document.getElementById('legend-title').innerText = "규칙상 좋은 자리";
         document.getElementById('legend-pos-color').style.color = '#2563eb';
         document.getElementById('legend-pos-color').innerText = "● 파란색";
-        document.getElementById('legend-pos-text').innerText = ": 봇이 우선적으로 검토하는 자리";
+        document.getElementById('legend-pos-text').innerText = ": 지금 규칙상 좋아 보이는 자리";
         document.getElementById('legend-neg-color').style.color = '#64748b';
         document.getElementById('legend-neg-color').innerText = "● 회색";
         document.getElementById('legend-neg-text').innerText = ": 상대적으로 가능성이 낮은 자리";
     } else if (viewMode === 2) {
-        document.getElementById('legend-title').innerText = "사용자 다음 수 확률 시각화";
+        document.getElementById('legend-title').innerText = "상대 예상 자리";
         document.getElementById('legend-pos-color').style.color = '#ef4444';
         document.getElementById('legend-pos-color').innerText = "● 빨간색";
         document.getElementById('legend-pos-text').innerText = ": 사용자가 다음에 둘 가능성이 높은 자리";
@@ -697,13 +795,21 @@ function updateVisualizationLegend() {
         document.getElementById('legend-neg-color').innerText = "● 옅은 회색";
         document.getElementById('legend-neg-text').innerText = ": 상대적으로 덜 선택될 자리";
     } else if (viewMode === 3) {
-        document.getElementById('legend-title').innerText = "봇 선택 확률 시각화";
+        document.getElementById('legend-title').innerText = "봇 선택 가능성";
         document.getElementById('legend-pos-color').style.color = '#10b981';
         document.getElementById('legend-pos-color').innerText = "● 초록색";
         document.getElementById('legend-pos-text').innerText = ": 봇이 실제로 선택할 가능성이 높은 후보";
         document.getElementById('legend-neg-color').style.color = '#94a3b8';
         document.getElementById('legend-neg-color').innerText = "● 회색";
         document.getElementById('legend-neg-text').innerText = ": 상대적으로 낮은 선택 확률의 후보";
+    } else if (viewMode === 4) {
+        document.getElementById('legend-title').innerText = "경험상 좋은 자리";
+        document.getElementById('legend-pos-color').style.color = '#8b5cf6';
+        document.getElementById('legend-pos-color').innerText = "● 보라색";
+        document.getElementById('legend-pos-text').innerText = ": 지난 판들을 보고 유리하다고 느끼는 자리";
+        document.getElementById('legend-neg-color').style.color = '#94a3b8';
+        document.getElementById('legend-neg-color').innerText = "● 회색";
+        document.getElementById('legend-neg-text').innerText = ": 아직 경험상 덜 끌리는 자리";
     }
 }
 
@@ -715,7 +821,7 @@ function updateVisualizationControls() {
 }
 
 function setViewMode(mode) {
-    const normalized = Number.isFinite(mode) ? Math.max(0, Math.min(3, mode)) : 0;
+    const normalized = Number.isFinite(mode) ? Math.max(0, Math.min(4, mode)) : 0;
     viewMode = normalized;
     updateVisualizationControls();
 
@@ -793,7 +899,7 @@ async function botMove() {
     pushLog(STYLE_FIRST_MODE ? `패턴 분석 중...` : `수읽기 중...`, 'bot-sys');
     await sleep(500);
 
-    const profile = getDifficultyProfile(stats.total);
+    const profile = getEffectiveDifficultyProfile(stats.total);
     const styleConfidence = getPlayerStyleConfidence();
     let cans = getCandidates(board);
     let scoredCans = [];
@@ -804,6 +910,16 @@ async function botMove() {
     if (botWinningMoves.length) {
         const bestWin = botWinningMoves.sort((a, b) => (userPredictionMap[b] || 0) - (userPredictionMap[a] || 0))[0];
         pushLog(`끝낼 수 있는 수를 선택했습니다.`, 'bot-act');
+        recordDecisionTelemetry([{
+            idx: bestWin,
+            score: PATTERNS.WIN,
+            rawScore: PATTERNS.WIN,
+            tacticContribution: PATTERNS.WIN,
+            adaptiveContribution: 0,
+            predictionContribution: userPredictionMap[bestWin] || 0,
+            riskAfter: 0,
+            prob: 1
+        }], bestWin, { winningMove: true });
         await sleep(200);
         makeMove(bestWin % SIZE, Math.floor(bestWin / SIZE), 2);
         const winState = checkWin(bestWin % SIZE, Math.floor(bestWin / SIZE), 2);
@@ -881,8 +997,10 @@ async function botMove() {
             idx,
             score: blendedScore,
             rawScore,
+            tacticContribution: rawScore * rawWeight,
             adaptiveContribution,
-            predictionContribution
+            predictionContribution,
+            riskAfter: userImmediateAfter
         });
     }
 
@@ -890,7 +1008,7 @@ async function botMove() {
     const rankedWithProb = getSoftmaxRanked(ranked, Math.max(0.02, profile.noise));
     let best = chooseMoveFromRanked(rankedWithProb, profile);
 
-    clearDecisionTelemetry();
+    recordDecisionTelemetry(rankedWithProb, best, { forcedBlocks });
 
     const selectedMove = ranked.find(item => item.idx === best);
     if (forcedBlocks.size > 0 && forcedBlocks.has(best)) {
@@ -979,6 +1097,8 @@ function updateProb() {
 // ==========================================
 async function endGame(res) {
     isThinking = true;
+    isReviewingGame = true;
+    updateUI();
     if(res === 'won') stats.won++; else if(res === 'lost') stats.lost++; else stats.draws++;
     stats.total++; 
     localStorage.setItem('gomoku-stats', JSON.stringify(stats));
@@ -992,8 +1112,10 @@ async function endGame(res) {
     winProbHistory.push(avgProb);
     localStorage.setItem('gomoku-winprob-history', JSON.stringify(winProbHistory.slice(-20)));
 
-    playerModel.gamesAnalyzed = (playerModel.gamesAnalyzed || 0) + 1;
-    if (res === 'won') {
+    if (experimentSettings.learningEnabled) {
+        playerModel.gamesAnalyzed = (playerModel.gamesAnalyzed || 0) + 1;
+    }
+    if (experimentSettings.learningEnabled && res === 'won') {
         // 패배한 판의 사용자 공격 좌표를 강하게 저장해서 같은 공격 재등장 시 빠르게 방어한다.
         gameHistory.forEach(h => {
             if (h.player !== 1) return;
@@ -1001,7 +1123,7 @@ async function endGame(res) {
             playerModel.threatCells[w] = (playerModel.threatCells[w] || 0) + 3;
         });
     }
-    savePlayerModel();
+    if (experimentSettings.learningEnabled) savePlayerModel();
     
     document.getElementById('modal-overlay').style.display = 'flex';
     document.getElementById('modal-title').innerText = res === 'won' ? "당신의 승리!" : (res === 'lost' ? "봇의 승리!" : "무승부!");
@@ -1014,10 +1136,11 @@ async function endGame(res) {
     } else {
         pushLog(`무승부입니다.`, 'bot-act');
     }
-    pushLog(`학습 저장 중...`, 'bot-nn');
+    pushLog(experimentSettings.learningEnabled ? `방금 판을 복습하는 중...` : `경험 저장이 꺼져 있어 결과만 확인합니다.`, 'bot-nn');
 
     const reward = res === 'lost' ? 1 : (res === 'won' ? -1 : 0);
     let xsData = [], ysData = [];
+    let finalLoss = null;
     
     // 8방향 증강(Augmentation) 헬퍼 함수
     const getAugmented = (flatBoard) => {
@@ -1057,19 +1180,46 @@ async function endGame(res) {
         }
     });
 
-    if(xsData.length > 0) {
+    if(experimentSettings.learningEnabled && xsData.length > 0) {
         const xs = tf.tensor2d(xsData), ys = tf.tensor2d(ysData);
         try {
-            const h = await model.fit(xs, ys, { epochs: 3, batchSize: 64 });
-            let fLoss = h.history.loss[0];
-            lossHistory.push(fLoss); 
+            const epochs = Math.max(1, Math.round(3 * clamp(Number(experimentSettings.learningSpeed) || 1, 0.5, 1.5)));
+            const h = await model.fit(xs, ys, { epochs, batchSize: 64 });
+            finalLoss = h.history.loss[0];
+            lossHistory.push(finalLoss); 
             localStorage.setItem('gomoku-loss-history', JSON.stringify(lossHistory.slice(-200)));
-            pushLog(`Loss ${fLoss.toFixed(4)}`, 'bot-sys');
+            pushLog(`복습 오차 ${finalLoss.toFixed(4)}`, 'bot-sys');
         } catch(e) {} finally { xs.dispose(); ys.dispose(); }
     }
     
-    await model.save('localstorage://gomoku-adaptive-weights'); 
-    document.getElementById('modal-body').innerText = "학습 완료! 게임판을 초기화합니다.";
+    if (experimentSettings.learningEnabled) {
+        await model.save('localstorage://gomoku-adaptive-weights');
+    }
+
+    const userMoves = gameHistory.filter(h => h.player === 1).length;
+    const learnedMoves = gameHistory.filter(h => h.player === 2).length;
+    const threats = Object.entries(playerModel.threatCells || {})
+        .map(([idx, value]) => ({ idx: Number(idx), value: Number(value) || 0 }))
+        .filter(item => item.value > 0)
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 3)
+        .map(item => formatCoord(item.idx));
+    lastLearningSummary = {
+        resultLabel: res === 'won' ? '사용자 승리' : (res === 'lost' ? '봇 승리' : '무승부'),
+        learnedMoves,
+        userMoves,
+        threats,
+        loss: finalLoss,
+        learningEnabled: experimentSettings.learningEnabled
+    };
+    if (experimentSettings.learningEnabled) {
+        localStorage.setItem(LAST_LEARNING_SUMMARY_KEY, JSON.stringify(lastLearningSummary));
+    }
+    renderModalLearningSummary();
+    isReviewingGame = false;
+    document.getElementById('modal-body').innerText = experimentSettings.learningEnabled
+        ? "복습 완료! 다음 판에 기억을 반영합니다."
+        : "결과 확인 완료. 이번 판은 기억에 저장하지 않았습니다.";
     updateUI();
 }
 
@@ -1149,7 +1299,7 @@ async function recalculateHeatmap() {
             const p = (predictionMap[idx] || 0) / maxPred;
             cells.push({ idx, score: clamp(p, 0, 1) });
         }
-    } else {
+    } else if (viewMode === 3) {
         const botMap = await getBotCandidateHeatmap(board);
         let maxProb = 0.001;
         Object.values(botMap).forEach(v => { maxProb = Math.max(maxProb, Number(v) || 0); });
@@ -1157,6 +1307,20 @@ async function recalculateHeatmap() {
             const idx = emptyIdxs[i];
             const p = (botMap[idx] || 0) / maxProb;
             cells.push({ idx, score: clamp(p, 0, 1) });
+        }
+    } else {
+        let mods = await getAdaptiveModifiersForCandidates(board, emptyIdxs, 2);
+        let minValue = Infinity;
+        let maxValue = -Infinity;
+        for (let i = 0; i < mods.length; i++) {
+            const value = Number(mods[i]) || 0;
+            minValue = Math.min(minValue, value);
+            maxValue = Math.max(maxValue, value);
+        }
+        const span = Math.max(0.0001, maxValue - minValue);
+        for (let i = 0; i < emptyIdxs.length; i++) {
+            const value = Number(mods[i]) || 0;
+            cells.push({ idx: emptyIdxs[i], score: clamp((value - minValue) / span, 0, 1) });
         }
     }
 
@@ -1179,8 +1343,10 @@ function renderHeatmap() {
             ctx.fillStyle = `rgba(37, 99, 235, ${0.16 + s * 0.72})`;
         } else if (viewMode === 2) {
             ctx.fillStyle = `rgba(239, 68, 68, ${0.16 + s * 0.72})`;
-        } else {
+        } else if (viewMode === 3) {
             ctx.fillStyle = `rgba(16, 185, 129, ${0.16 + s * 0.72})`;
+        } else {
+            ctx.fillStyle = `rgba(139, 92, 246, ${0.16 + s * 0.72})`;
         }
         
         ctx.fillRect(x+1, y+1, CELL-2, CELL-2);
@@ -1204,6 +1370,8 @@ function updateUI() {
     const p = winProbTrace[winProbTrace.length-1] || 0.5;
     document.getElementById('prob-user').style.width = (1-p)*100 + '%'; document.getElementById('prob-user').innerText = `당신 ${Math.round((1-p)*100)}%`;
     document.getElementById('prob-bot').innerText = `봇 ${Math.round(p*100)}%`;
+    updateLearningPanel();
+    updateMemoryPanel();
     renderCharts();
 }
 
@@ -1225,68 +1393,6 @@ function renderCharts() {
 }
 
 // ==========================================
-// Export / Import 로직
-// ==========================================
-
-function exportMemory() {
-    let memoryObject = {};
-    for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        // 오목봇 관련 키와 TensorFlow.js 모델 키 추출
-        if (key.startsWith('gomoku-') || key.startsWith('tensorflowjs_models/gomoku-adaptive-weights/')) {
-            memoryObject[key] = localStorage.getItem(key);
-        }
-    }
-    
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(memoryObject));
-    const downloadAnchorNode = document.createElement('a');
-    downloadAnchorNode.setAttribute("href", dataStr);
-    downloadAnchorNode.setAttribute("download", "omokbot_memory.json");
-    document.body.appendChild(downloadAnchorNode); 
-    downloadAnchorNode.click();
-    downloadAnchorNode.remove();
-}
-
-function importMemory(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = function(e) {
-        try {
-            const memoryObject = JSON.parse(e.target.result);
-            
-            // 기존 메모리 초기화 방지: 유효성 검사
-            let isValid = false;
-            let importedKeys = 0;
-            
-            // 로컬 스토리지 클리어 및 삽입
-            localStorage.clear();
-            for (const key in memoryObject) {
-                if (key.startsWith('gomoku-') || key.startsWith('tensorflowjs_models/')) {
-                    localStorage.setItem(key, memoryObject[key]);
-                    isValid = true;
-                    importedKeys++;
-                }
-            }
-
-            if(isValid) {
-                alert(`성공적으로 이어하기 데이터를 불러왔습니다! (${importedKeys}개의 세이브 파일)\n새로고침 됩니다.`);
-                location.reload();
-            } else {
-                alert("적합한 오목봇 세이브 파일이 아닙니다.");
-            }
-        } catch (error) {
-            alert("세이브 파일을 읽는 중 오류가 발생했습니다: " + error.message);
-        }
-        
-        // input 초기화 (같은 파일 재업로드 허용 위해)
-        event.target.value = '';
-    };
-    reader.readAsText(file);
-}
-
-// ==========================================
 // 버튼 및 UI 이벤트 등록
 // ==========================================
 document.getElementById('btn-play-again').onclick = () => { 
@@ -1294,6 +1400,7 @@ document.getElementById('btn-play-again').onclick = () => {
     gameHistory = []; 
     winProbTrace = [0.5]; 
     lastUserMoveIdx = null;
+    isReviewingGame = false;
     
     // 모달 및 보드 상태 원복
     const overlay = document.getElementById('modal-overlay');
@@ -1338,6 +1445,12 @@ document.getElementById('btn-reset').onclick = async () => {
         lossHistory = [];
         winProbHistory = [];
         playerModel = createDefaultPlayerModel();
+        Object.assign(experimentSettings, DEFAULT_EXPERIMENT_SETTINGS);
+        lastLearningSummary = null;
+        isReviewingGame = false;
+        saveExperimentSettings();
+        window.OmokEducation.syncExperimentControls(experimentSettings);
+        renderModalLearningSummary();
 
         clearDecisionTelemetry();
         currentHeatmapData = null;
@@ -1345,8 +1458,9 @@ document.getElementById('btn-reset').onclick = async () => {
 
         board = Array(SIZE * SIZE).fill(0);
         gameHistory = [];
-        winProbTrace = [0.5];
+        winProbTrace = [0.5]; 
         lastUserMoveIdx = null;
+        isReviewingGame = false;
 
         setViewMode(0);
 
@@ -1373,8 +1487,8 @@ document.getElementById('btn-reset').onclick = async () => {
         updateUI();
     }
 };
-document.getElementById('btn-export').onclick = () => { exportMemory(); };
-document.getElementById('import-file').addEventListener('change', importMemory);
+document.getElementById('btn-export').onclick = () => { window.OmokMemoryStore.exportMemory(); };
+document.getElementById('import-file').addEventListener('change', window.OmokMemoryStore.importMemory);
 
 // 아코디언 이벤트 (사이드 패널 토글)
 document.querySelectorAll('.section-title').forEach(title => {
@@ -1399,6 +1513,7 @@ document.getElementById('btn-start-load').addEventListener('click', () => {
 
 // 최초 실행 및 초기 상태
 isThinking = true; // 모달을 닫기 전까지는 착수 제한
+initExperimentControls();
 setStartupStatus('게임 환경 확인 중', false, '엔진과 저장된 데이터를 확인하고 있습니다.');
 initModel(); recalculateHeatmap(); renderBoard();
 updateVisualizationControls();
