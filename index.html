@@ -30,14 +30,14 @@
 <header>
     <div style="display:flex; align-items:center; gap:15px;">
         <h1 style="font-size: 1.25rem;">오목봇🤖</h1>
-        <div id="game-counter" style="font-size: 0.9rem; opacity: 0.8;">1번째 판</div>
+        <div id="game-counter" style="font-size: 0.9rem; opacity: 0.8;" data-rl-tip="강화학습에서 한 판은 에피소드입니다. 여러 에피소드가 쌓이면 학습 재료가 늘어납니다.">1번째 판</div>
     </div>
-    <div id="bot-level" class="level-badge level-low">Lv 1: 초보</div>
+    <div id="bot-level" class="level-badge level-low" data-rl-tip="강화학습에서 레벨은 누적 경험을 반영한 에이전트 상태입니다. 판이 쌓일수록 판단 기준이 달라집니다.">Lv 1: 초보</div>
 </header>
 
 <main>
     <div id="game-container">
-        <canvas id="board-canvas"></canvas>
+        <canvas id="board-canvas" tabindex="0" data-rl-tip="강화학습에서 이 보드는 환경 상태입니다. 에이전트는 현재 돌 배치를 보고 다음 행동을 고릅니다."></canvas>
         <div id="heatmap-legend" style="display:none; position:absolute; top:30px; left:30px; background:rgba(255,255,255,0.9); padding:10px; border-radius:8px; border:1px solid #ddd; font-size:0.75rem; box-shadow:0 2px 10px rgba(0,0,0,0.1); z-index:10; pointer-events:none;">
             <strong id="legend-title" style="display:block; margin-bottom:5px;">규칙상 좋은 자리</strong>
             <span id="legend-pos-color" style="color:#2563eb; font-weight:bold;">● 파란색</span><span id="legend-pos-text">: 봇이 우선적으로 검토하는 자리</span><br>
@@ -49,111 +49,112 @@
 
     <aside id="side-panel">
         <div class="win-prob-container">
-            <div class="win-prob-bar">
+            <div class="win-prob-bar" data-rl-tip="강화학습에서 이 막대는 가치 추정입니다. 현재 상태가 어느 쪽 결과에 가까운지 점수로 예측합니다.">
                 <div id="prob-user" class="prob-user" style="width: 50%;">당신 50%</div>
                 <div id="prob-bot" class="prob-bot" style="width: 50%;">봇 50%</div>
             </div>
         </div>
 
         <div class="panel-section" id="section-learning">
-            <div class="section-title">지금 무엇을 배우는 중?</div>
+            <div class="section-title" data-rl-tip="강화학습에서 이 영역은 학습 루프입니다. 대국에서 경험을 모으고, 복습하고, 다음 정책에 반영합니다.">지금 무엇을 배우는 중?</div>
             <div class="section-body">
                 <div class="learning-status">
-                    <div class="learning-journey" aria-label="학습 흐름">
-                        <div class="journey-step is-active" data-learning-step="play">
+                    <div class="learning-journey" aria-label="학습 흐름" data-rl-tip="강화학습에서 이 흐름은 경험 수집, 복습, 정책 반영의 학습 루프입니다.">
+                        <div class="journey-step is-active" data-learning-step="play" data-rl-tip="강화학습에서 대국은 에피소드입니다. 한 판 동안 상태와 행동을 모읍니다.">
                             <span>1</span>
                             <strong>대국</strong>
                             <small>장면 모으기</small>
                         </div>
-                        <div class="journey-step" data-learning-step="review">
+                        <div class="journey-step" data-learning-step="review" data-rl-tip="강화학습에서 복습은 경험 재사용입니다. 방금 판의 장면을 다시 보며 모델을 업데이트합니다.">
                             <span>2</span>
                             <strong>복습</strong>
                             <small>방금 판 기억</small>
                         </div>
-                        <div class="journey-step" data-learning-step="apply">
+                        <div class="journey-step" data-learning-step="apply" data-rl-tip="강화학습에서 반영은 정책 갱신입니다. 복습한 결과가 다음 행동 선택에 영향을 줍니다.">
                             <span>3</span>
                             <strong>반영</strong>
                             <small>다음 판 변화</small>
                         </div>
                     </div>
                     <div id="learning-phase" class="learning-phase">새 판을 준비하고 있습니다.</div>
-                    <div class="memory-meter" aria-label="봇 기억 강도">
+                    <div class="memory-meter" aria-label="봇 기억 강도" data-rl-tip="강화학습에서 이 막대는 누적 경험의 양에 가깝습니다. 데이터가 많을수록 사용자 패턴 추정이 안정됩니다.">
                         <div id="learning-confidence-bar" class="memory-meter-fill" style="width: 0%;"></div>
                     </div>
                     <div class="status-grid">
-                        <div>
+                        <div data-rl-tip="강화학습에서 장면은 상태-행동 샘플입니다. 한 수마다 학습에 쓸 수 있는 예시가 하나씩 생깁니다.">
                             <span class="status-label">이번 판 장면</span>
                             <strong id="learning-seen-scenes">0개</strong>
                         </div>
-                        <div>
+                        <div data-rl-tip="강화학습에서 판은 에피소드입니다. 시작부터 종료까지 이어진 경험 단위입니다.">
                             <span class="status-label">기억한 판</span>
                             <strong id="learning-games">0판</strong>
                         </div>
                     </div>
-                    <div id="learning-last-summary" class="panel-note">아직 복습한 판이 없습니다.</div>
-                    <div id="learning-tags" class="tag-row"></div>
+                    <div id="learning-last-summary" class="panel-note" data-rl-tip="강화학습에서 이 요약은 마지막 학습 업데이트 결과입니다. 방금 판이 다음 정책에 어떻게 반영됐는지 보여줍니다.">아직 복습한 판이 없습니다.</div>
+                    <div id="learning-tags" class="tag-row" data-rl-tip="강화학습에서 이 태그들은 보상과 위험 판단에 영향을 주는 특징입니다."></div>
                 </div>
             </div>
         </div>
 
         <div class="panel-section" id="section-decision">
-            <div class="section-title">왜 이 수를 뒀을까?</div>
+            <div class="section-title" data-rl-tip="강화학습에서 이 영역은 정책 해석입니다. 에이전트가 어떤 행동 후보를 비교했는지 보여줍니다.">왜 이 수를 뒀을까?</div>
             <div class="section-body">
-                <div id="decision-list" class="decision-list">
+                <div id="decision-list" class="decision-list" data-rl-tip="강화학습에서 이 목록은 정책이 검토한 행동 후보입니다. 각 후보는 봇이 둘 수 있는 다음 수입니다.">
                     <div class="panel-note">봇이 한 수를 둔 뒤 후보 분석이 여기에 표시됩니다.</div>
                 </div>
             </div>
         </div>
 
         <div class="panel-section collapsed" id="section-memory">
-            <div class="section-title">봇이 기억한 것</div>
+            <div class="section-title" data-rl-tip="강화학습에서 이 영역은 경험 메모리입니다. 지난 판에서 반복적으로 본 상태와 전이를 모아 둡니다.">봇이 기억한 것</div>
             <div class="section-body">
                 <div class="memory-block">
-                    <span class="status-label">자주 본 사용자 위치</span>
+                    <span class="status-label" data-rl-tip="강화학습에서 이 값은 상태 방문 빈도입니다. 사용자가 자주 만든 장면을 기억합니다.">자주 본 사용자 위치</span>
                     <div id="memory-common-moves" class="tag-row muted-tags"></div>
                 </div>
                 <div class="memory-block">
-                    <span class="status-label">조심하는 위험 자리</span>
+                    <span class="status-label" data-rl-tip="강화학습에서 이 값은 피해야 할 결과와 연결된 위험 상태입니다.">조심하는 위험 자리</span>
                     <div id="memory-threats" class="tag-row muted-tags"></div>
                 </div>
                 <div class="memory-block">
-                    <span class="status-label">반복된 흐름</span>
+                    <span class="status-label" data-rl-tip="강화학습에서 이 값은 상태 전이입니다. 한 장면 뒤에 어떤 장면이 자주 이어지는지 보여줍니다.">반복된 흐름</span>
                     <div id="memory-flow" class="panel-note">아직 반복 흐름이 충분하지 않습니다.</div>
                 </div>
             </div>
         </div>
 
         <div class="panel-section collapsed" id="section-experiment">
-            <div class="section-title">실험 조절</div>
+            <div class="section-title" data-rl-tip="강화학습에서 이 영역은 정책의 행동 선택 방식을 조절합니다. 탐색과 활용의 균형을 바꿀 수 있습니다.">봇 성향</div>
             <div class="section-body">
+                <div class="control-note">다음 봇 차례부터 선택 방식이 달라집니다.</div>
                 <div class="control-row">
-                    <label for="experiment-preset">프리셋</label>
+                    <label for="experiment-preset" data-rl-tip="강화학습에서 스타일은 정책 설정입니다. 같은 상태라도 어떤 기준을 더 믿을지 정합니다.">스타일</label>
                     <select id="experiment-preset">
                         <option value="balanced">균형</option>
-                        <option value="beginner">초보 실험</option>
-                        <option value="tactical">전술 우선</option>
-                        <option value="memory">상대 분석 우선</option>
-                        <option value="custom">직접 조절</option>
+                        <option value="beginner">쉽게 두기</option>
+                        <option value="tactical">신중하게</option>
+                        <option value="memory">내 습관 노리기</option>
+                        <option value="custom">직접 맞춤</option>
                     </select>
                 </div>
-                <label class="range-row" for="setting-adventure">
-                    <span>모험성 <strong id="value-adventure">보통</strong></span>
+                <label class="range-row" for="setting-adventure" data-rl-tip="강화학습에서 뜻밖의 수는 탐색입니다. 익숙한 최선 후보 밖의 행동도 시험하게 합니다.">
+                    <span>뜻밖의 수 <strong id="value-adventure">보통</strong></span>
                     <input id="setting-adventure" type="range" min="0" max="2" step="0.1" value="1">
                 </label>
-                <label class="range-row" for="setting-tactics">
-                    <span>규칙 감각 <strong id="value-tactics">보통</strong></span>
+                <label class="range-row" for="setting-tactics" data-rl-tip="강화학습에서 규칙 우선은 보상 설계에 가깝습니다. 오목 규칙상 좋은 모양을 더 크게 평가합니다.">
+                    <span>규칙 우선 <strong id="value-tactics">보통</strong></span>
                     <input id="setting-tactics" type="range" min="0" max="2" step="0.1" value="1">
                 </label>
-                <label class="range-row" for="setting-memory">
-                    <span>기억 의존도 <strong id="value-memory">보통</strong></span>
+                <label class="range-row" for="setting-memory" data-rl-tip="강화학습에서 내 습관 반영은 상대 모델입니다. 사용자의 반복 행동을 상태 판단에 더 반영합니다.">
+                    <span>내 습관 반영 <strong id="value-memory">보통</strong></span>
                     <input id="setting-memory" type="range" min="0" max="2" step="0.1" value="1">
                 </label>
-                <label class="range-row" for="setting-learning-speed">
-                    <span>학습 속도 <strong id="value-learning-speed">보통</strong></span>
+                <label class="range-row" for="setting-learning-speed" data-rl-tip="강화학습에서 복습 반영은 학습률에 가깝습니다. 한 판의 경험이 다음 판단을 얼마나 빨리 바꾸는지 조절합니다.">
+                    <span>복습 반영 <strong id="value-learning-speed">보통</strong></span>
                     <input id="setting-learning-speed" type="range" min="0.5" max="1.5" step="0.1" value="1">
                 </label>
-                <label class="toggle-row" for="setting-learning-enabled">
-                    <span>경험 저장</span>
+                <label class="toggle-row" for="setting-learning-enabled" data-rl-tip="강화학습에서 판 끝나면 기억하기는 경험 저장입니다. 끄면 이번 판은 다음 학습에 넣지 않습니다.">
+                    <span>판 끝나면 기억하기</span>
                     <input id="setting-learning-enabled" type="checkbox" checked>
                 </label>
             </div>
@@ -162,7 +163,7 @@
         <div class="panel-section collapsed" id="section-momentum">
             <div class="section-title">승률 흐름</div>
             <div class="section-body">
-                <div class="chart-container" id="momentum-chart"></div>
+                <div class="chart-container" id="momentum-chart" data-rl-tip="강화학습에서 이 그래프는 가치 추정의 변화입니다. 수가 진행되며 상태 평가가 어떻게 바뀌는지 보여줍니다."></div>
                 <div style="font-size: 0.7rem; color: #888; text-align: center; margin-top: 5px;">현재 판의 승률 흐름</div>
             </div>
         </div>
@@ -170,7 +171,7 @@
         <div class="panel-section" id="section-console">
             <div class="section-title">오목봇 로그</div>
             <div class="section-body">
-                <div id="ai-console">
+                <div id="ai-console" data-rl-tip="강화학습에서 이 로그는 에이전트 피드백입니다. 대국, 복습, 저장 같은 학습 흐름을 알려줍니다.">
                     <div class="chat-bubble bot-sys">대국 준비 완료! 당신의 습관을 학습하며 방어할 준비가 되었습니다.</div>
                 </div>
             </div>
@@ -180,20 +181,20 @@
 </main>
 
 <footer>
-    <div id="history-text">전적: 0승 0무 0패</div>
+    <div id="history-text" data-rl-tip="강화학습에서 전적은 에피소드 결과입니다. 승패와 무승부가 다음 복습의 기준 신호가 됩니다.">전적: 0승 0무 0패</div>
     <div class="footer-btns">
         <div class="viz-control" aria-label="보드 색 보기 모드">
             <span class="viz-label">보드 색 보기</span>
             <div class="viz-btn-group" role="group" aria-label="보드 색 보기 선택">
-                <button type="button" class="viz-btn is-active" data-view-mode="0">끔</button>
-                <button type="button" class="viz-btn" data-view-mode="1">규칙</button>
-                <button type="button" class="viz-btn" data-view-mode="2">예상</button>
-                <button type="button" class="viz-btn" data-view-mode="3">선택</button>
-                <button type="button" class="viz-btn" data-view-mode="4">경험</button>
+                <button type="button" class="viz-btn is-active" data-view-mode="0" data-rl-tip="강화학습 신호를 숨기고 일반 오목판처럼 봅니다.">끔</button>
+                <button type="button" class="viz-btn" data-view-mode="1" data-rl-tip="강화학습에서 규칙 색은 보상 설계입니다. 좋은 모양과 위험한 모양을 점수화합니다.">규칙</button>
+                <button type="button" class="viz-btn" data-view-mode="2" data-rl-tip="강화학습에서 예상 색은 상대 모델입니다. 사용자가 다음에 둘 가능성이 큰 행동을 봅니다.">예상</button>
+                <button type="button" class="viz-btn" data-view-mode="3" data-rl-tip="강화학습에서 선택 색은 정책 분포입니다. 봇이 실제로 선택할 확률이 높은 행동을 보여줍니다.">선택</button>
+                <button type="button" class="viz-btn" data-view-mode="4" data-rl-tip="강화학습에서 경험 색은 가치 함수입니다. 지난 판을 바탕으로 좋아 보이는 상태를 표시합니다.">경험</button>
             </div>
         </div>
-        <span class="footer-link" id="btn-export">기억 파일로 내보내기 📥</span>
-        <span class="footer-link" id="btn-reset" style="color: #ef4444;">전체 초기화</span>
+        <span class="footer-link" id="btn-export" data-rl-tip="강화학습에서 이 파일은 경험 메모리 백업입니다. 브라우저에 저장된 학습 흔적을 옮길 수 있습니다.">기억 파일로 내보내기 📥</span>
+        <span class="footer-link" id="btn-reset" style="color: #ef4444;" data-rl-tip="강화학습에서 초기화는 경험 메모리를 비우는 동작입니다. 에이전트가 다시 처음 상태에서 시작합니다.">전체 초기화</span>
         <input type="file" id="import-file" accept=".json">
     </div>
 </footer>
@@ -209,6 +210,8 @@
         </div>
     </div>
 </div>
+
+<div id="rl-tooltip" class="rl-tooltip" role="tooltip"></div>
 
 <script src="src/educationUi.js" defer></script>
 <script src="src/memoryStore.js" defer></script>

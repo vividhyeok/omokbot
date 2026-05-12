@@ -2,6 +2,7 @@
 // 설정 및 상태
 // ==========================================
 const SIZE = 15, CELL = 35, PAD = 20, CANVAS_SIZE = SIZE * CELL + PAD * 2;
+const BOARD_COLUMNS = 'ABCDEFGHIJKLMNO'.split('');
 let board = JSON.parse(localStorage.getItem('gomoku-ongoing-board')) || Array(SIZE * SIZE).fill(0);
 let gameHistory = JSON.parse(localStorage.getItem('gomoku-ongoing-history')) || []; 
 let winProbTrace = JSON.parse(localStorage.getItem('gomoku-ongoing-prob')) || [0.5];
@@ -729,6 +730,35 @@ function formatCoord(idx) {
     return window.OmokEducation.formatCoord(idx, SIZE);
 }
 
+function drawCoordinateLabels() {
+    ctx.save();
+    ctx.fillStyle = 'rgba(74, 53, 18, 0.82)';
+    ctx.font = '700 10px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (let i = 0; i < SIZE; i++) {
+        const center = PAD + i * CELL + CELL / 2;
+        const label = BOARD_COLUMNS[i];
+        ctx.fillText(label, center, 10);
+        ctx.fillText(label, center, CANVAS_SIZE - 9);
+    }
+
+    ctx.textAlign = 'right';
+    for (let i = 0; i < SIZE; i++) {
+        const center = PAD + i * CELL + CELL / 2;
+        ctx.fillText(String(i + 1), PAD - 7, center);
+    }
+
+    ctx.textAlign = 'left';
+    for (let i = 0; i < SIZE; i++) {
+        const center = PAD + i * CELL + CELL / 2;
+        ctx.fillText(String(i + 1), CANVAS_SIZE - PAD + 7, center);
+    }
+
+    ctx.restore();
+}
+
 function clearDecisionTelemetry() {
     lastDecisionSummary = null;
     window.OmokEducation.renderDecisionPanel(null);
@@ -1239,6 +1269,7 @@ function renderBoard() {
     [[3,3],[3,11],[11,3],[11,11],[7,7]].forEach(([r,c]) => { 
         ctx.fillStyle = '#8B6914'; ctx.beginPath(); ctx.arc(PAD+c*CELL+CELL/2,PAD+r*CELL+CELL/2,3,0,7); ctx.fill(); 
     });
+    drawCoordinateLabels();
     
     board.forEach((v,i) => { 
         if(v===0) return; 

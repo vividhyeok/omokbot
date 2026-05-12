@@ -372,6 +372,14 @@ canvas {
     color: #374151;
 }
 
+.control-note {
+    margin-bottom: 10px;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.45;
+    word-break: keep-all;
+}
+
 .control-row select {
     border: 1px solid #d1d5db;
     border-radius: 6px;
@@ -420,6 +428,36 @@ canvas {
     color: #374151;
     font-size: 0.82rem;
     line-height: 1.5;
+}
+
+[data-rl-tip] {
+    cursor: help;
+}
+
+.rl-tooltip {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 5000;
+    max-width: min(320px, calc(100vw - 24px));
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: #111827;
+    color: white;
+    box-shadow: 0 12px 28px rgba(0,0,0,0.28);
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.45;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    pointer-events: none;
+    word-break: keep-all;
+}
+
+.rl-tooltip.is-visible {
+    opacity: 1;
+    transform: translateY(0);
 }
 
 /* 모달 오버레이 */
@@ -474,9 +512,7 @@ canvas {
 }
 
 .startup-status.is-ready {
-    background: #e8fff4;
-    color: #047857;
-    border-color: rgba(16, 185, 129, 0.22);
+    display: none;
 }
 
 .startup-status.is-ready .startup-spinner {

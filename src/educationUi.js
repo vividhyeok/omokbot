@@ -1,11 +1,17 @@
 (function () {
+    const COLUMN_LABELS = 'ABCDEFGHIJKLMNO'.split('');
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const escapeHtml = value => String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 
     function formatCoord(idx, size) {
         if (!Number.isFinite(idx) || idx < 0) return '-';
         const x = idx % size;
         const y = Math.floor(idx / size);
-        return `${x + 1}, ${y + 1}`;
+        return `${y + 1}. ${COLUMN_LABELS[x] || x + 1}`;
     }
 
     function topArrayEntries(values, limit = 3) {
@@ -31,7 +37,10 @@
             el.innerHTML = `<span class="panel-note">${fallback}</span>`;
             return;
         }
-        el.innerHTML = items.map(item => `<span class="memory-tag">${item}</span>`).join('');
+        el.innerHTML = items.map(item => {
+            const text = escapeHtml(item);
+            return `<span class="memory-tag" data-rl-tip="강화학습에서 이 태그는 모델이 기억한 상태 특징입니다. ${text} 같은 위치나 흐름이 다음 판단에 참고됩니다.">${text}</span>`;
+        }).join('');
     }
 
     function getMainDecisionReason(item) {
@@ -84,28 +93,28 @@
         }
 
         list.innerHTML = summary.candidates.map(item => `
-            <div class="decision-item ${item.selected ? 'is-selected' : ''}">
+            <div class="decision-item ${item.selected ? 'is-selected' : ''}" data-rl-tip="강화학습에서 ${escapeHtml(item.coord)} 후보는 행동입니다. 정책은 여러 행동 후보 중 하나를 고릅니다.">
                 <div class="decision-head">
                     <span>${item.selected ? '선택' : '후보'} ${item.coord}</span>
                     <span class="decision-reason">${item.reason} · ${Math.round(item.probability * 100)}%</span>
                 </div>
                 <div class="decision-bars">
-                    <div class="decision-bar">
+                    <div class="decision-bar" data-rl-tip="강화학습에서 규칙 점수는 보상 설계입니다. 좋은 모양과 위험한 모양을 사람이 정한 기준으로 점수화합니다.">
                         <span>규칙</span>
                         <span class="decision-bar-track"><span class="decision-bar-fill" style="width:${Math.round(item.tactic * 100)}%"></span></span>
                         <span>${Math.round(item.tactic * 100)}</span>
                     </div>
-                    <div class="decision-bar">
+                    <div class="decision-bar" data-rl-tip="강화학습에서 기억 점수는 경험 메모리입니다. 이전 판에서 자주 본 사용자 패턴을 참고합니다.">
                         <span>기억</span>
                         <span class="decision-bar-track"><span class="decision-bar-fill memory" style="width:${Math.round(item.memory * 100)}%"></span></span>
                         <span>${Math.round(item.memory * 100)}</span>
                     </div>
-                    <div class="decision-bar">
+                    <div class="decision-bar" data-rl-tip="강화학습에서 경험 점수는 가치 함수입니다. 지난 복습을 바탕으로 이 상태가 좋아 보이는지 추정합니다.">
                         <span>경험</span>
                         <span class="decision-bar-track"><span class="decision-bar-fill value" style="width:${Math.round(item.value * 100)}%"></span></span>
                         <span>${Math.round(item.value * 100)}</span>
                     </div>
-                    <div class="decision-bar">
+                    <div class="decision-bar" data-rl-tip="강화학습에서 최종 점수는 정책 분포입니다. 여러 신호를 합쳐 실제 선택 확률을 만듭니다.">
                         <span>최종</span>
                         <span class="decision-bar-track"><span class="decision-bar-fill policy" style="width:${Math.round(item.policy * 100)}%"></span></span>
                         <span>${Math.round(item.policy * 100)}</span>
@@ -207,13 +216,13 @@
         `;
     }
 
-    function describeScale(value, middle = '보통') {
+    function describeScale(value, labels = ['낮음', '약간 낮음', '보통', '약간 높음', '높음']) {
         const v = Number(value);
-        if (v < 0.45) return '낮음';
-        if (v < 0.85) return '약간 낮음';
-        if (v <= 1.15) return middle;
-        if (v <= 1.55) return '약간 높음';
-        return '높음';
+        if (v < 0.45) return labels[0];
+        if (v < 0.85) return labels[1];
+        if (v <= 1.15) return labels[2];
+        if (v <= 1.55) return labels[3];
+        return labels[4];
     }
 
     function syncExperimentControls(settings) {
@@ -233,10 +242,10 @@
         if (preset) preset.value = settings.preset || 'balanced';
 
         const labelMap = {
-            'value-adventure': describeScale(settings.adventure),
-            'value-tactics': describeScale(settings.tactics),
-            'value-memory': describeScale(settings.memory),
-            'value-learning-speed': describeScale(settings.learningSpeed)
+            'value-adventure': describeScale(settings.adventure, ['거의 안 둠', '가끔', '보통', '자주', '매우 자주']),
+            'value-tactics': describeScale(settings.tactics, ['약하게', '조금 약하게', '보통', '강하게', '매우 강하게']),
+            'value-memory': describeScale(settings.memory, ['약하게', '조금 약하게', '보통', '강하게', '매우 강하게']),
+            'value-learning-speed': describeScale(settings.learningSpeed, ['천천히', '조금 천천히', '보통', '빠르게', '매우 빠르게'])
         };
         Object.entries(labelMap).forEach(([id, text]) => {
             const el = document.getElementById(id);
@@ -291,10 +300,86 @@
         }
     }
 
+    function initRlTooltips() {
+        const tooltip = document.getElementById('rl-tooltip');
+        if (!tooltip || tooltip.dataset.bound === 'true') return;
+        tooltip.dataset.bound = 'true';
+        let currentTarget = null;
+
+        const placeTooltip = (x, y) => {
+            const margin = 12;
+            tooltip.style.left = '0px';
+            tooltip.style.top = '0px';
+            const rect = tooltip.getBoundingClientRect();
+            const nextX = clamp(x + 14, margin, window.innerWidth - rect.width - margin);
+            const nextY = clamp(y + 14, margin, window.innerHeight - rect.height - margin);
+            tooltip.style.left = `${nextX}px`;
+            tooltip.style.top = `${nextY}px`;
+        };
+
+        const showTooltip = (target, event) => {
+            const text = target.getAttribute('data-rl-tip');
+            if (!text) return;
+            currentTarget = target;
+            tooltip.textContent = text;
+            tooltip.classList.add('is-visible');
+            target.setAttribute('aria-describedby', 'rl-tooltip');
+
+            const rect = target.getBoundingClientRect();
+            const x = event && Number.isFinite(event.clientX) ? event.clientX : rect.left + rect.width / 2;
+            const y = event && Number.isFinite(event.clientY) ? event.clientY : rect.top + rect.height / 2;
+            placeTooltip(x, y);
+        };
+
+        const hideTooltip = () => {
+            if (currentTarget) currentTarget.removeAttribute('aria-describedby');
+            currentTarget = null;
+            tooltip.classList.remove('is-visible');
+        };
+
+        document.addEventListener('mouseover', event => {
+            const target = event.target.closest('[data-rl-tip]');
+            if (!target || target === currentTarget) return;
+            showTooltip(target, event);
+        });
+
+        document.addEventListener('mousemove', event => {
+            if (!currentTarget || !currentTarget.matches(':hover')) return;
+            placeTooltip(event.clientX, event.clientY);
+        });
+
+        document.addEventListener('mouseout', event => {
+            if (!currentTarget) return;
+            const nextTarget = event.relatedTarget;
+            if (nextTarget && currentTarget.contains(nextTarget)) return;
+            hideTooltip();
+        });
+
+        document.addEventListener('focusin', event => {
+            const target = event.target.closest('[data-rl-tip]');
+            if (target) showTooltip(target, null);
+        });
+
+        document.addEventListener('focusout', event => {
+            if (currentTarget && currentTarget.contains(event.target)) hideTooltip();
+        });
+
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') hideTooltip();
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initRlTooltips, { once: true });
+    } else {
+        initRlTooltips();
+    }
+
     window.OmokEducation = {
         buildDecisionSummary,
         formatCoord,
         initExperimentControls,
+        initRlTooltips,
         renderDecisionPanel,
         renderModalLearningSummary,
         syncExperimentControls,
